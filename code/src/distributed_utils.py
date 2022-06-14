@@ -11,10 +11,7 @@ def init_ddp(conf: OmegaConf) -> None:
 
     # prepare distributed
     dist.init_process_group(
-        backend="nccl",
-        init_method=dist_url,
-        world_size=world_size,
-        rank=rank,
+        backend="nccl", init_method=dist_url, world_size=world_size, rank=rank,
     )
     torch.cuda.set_device(rank)
 

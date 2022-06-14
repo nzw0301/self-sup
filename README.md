@@ -33,9 +33,6 @@ conda install pytorch==1.6.0 torchvision==0.7.0 cudatoolkit=10.2 -c pytorch
 
 Please run __content of all scripts__ in `./scripts/**/train/` under [`code`](./code).
 
-## Evaluation
-
-After training, please run [`./gather_weights.py`](./gather_weights.py) to generate text files for evaluation.
 
 Please run __content__ of all scripts in `./scripts/**/eval/` under [`code`](./code) as well.
 

@@ -12,7 +12,9 @@ class RandomGaussianBlur(object):
         if np.random.rand() > 0.5:
             return img
         sigma = np.random.uniform(0.1, 2.0)
-        return cv2.GaussianBlur(np.asarray(img), (23, 23), sigma)  # 23 is for imagenet that has size of 224 x 224.
+        return cv2.GaussianBlur(
+            np.asarray(img), (23, 23), sigma
+        )  # 23 is for imagenet that has size of 224 x 224.
 
 
 def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Compose:
@@ -28,7 +30,7 @@ def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Co
         brightness=0.8 * strength,
         contrast=0.8 * strength,
         saturation=0.8 * strength,
-        hue=0.2 * strength
+        hue=0.2 * strength,
     )
 
     rnd_color_jitter = transforms.RandomApply(transforms=[color_jitter], p=0.8)
@@ -49,9 +51,7 @@ def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Co
         raise ValueError("`size` must be either `32` or `224`.")
     common_transforms.append(transforms.ToTensor())
 
-    return transforms.Compose(
-        common_transforms
-    )
+    return transforms.Compose(common_transforms)
 
 
 class SimCLRTransforms(object):

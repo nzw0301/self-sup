@@ -8,19 +8,21 @@ import torch
 import torchvision
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
-
 from src.check_hydra_conf import check_hydra_conf
 from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import fetch_dataset, create_data_loaders
-from src.data.utils import get_num_classes
+from src.data.utils import create_data_loaders, fetch_dataset, get_num_classes
 from src.distributed_utils import init_ddp
 from src.eval_utils import make_two_vector_for_confusion_matrix
-from src.lr_utils import calculate_warmup_lr, calculate_initial_lr
+from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
 from src.model import SupervisedModel
+from torch.utils.data import DataLoader
 
 
-def validation(validation_data_loader: torch.utils.data.DataLoader, model: SupervisedModel, local_rank: int) -> tuple:
+def validation(
+    validation_data_loader: torch.utils.data.DataLoader,
+    model: SupervisedModel,
+    local_rank: int,
+) -> tuple:
     """
     :param validation_data_loader: Validation data loader
     :param model: ResNet based classifier.
@@ -30,14 +32,16 @@ def validation(validation_data_loader: torch.utils.data.DataLoader, model: Super
 
     model.eval()
 
-    sum_loss = torch.tensor([0.]).to(local_rank)
-    num_corrects = torch.tensor([0.]).to(local_rank)
+    sum_loss = torch.tensor([0.0]).to(local_rank)
+    num_corrects = torch.tensor([0.0]).to(local_rank)
 
     with torch.no_grad():
         for data, targets in validation_data_loader:
             data, targets = data.to(local_rank), targets.to(local_rank)
             unnormalized_features = model(data)
-            loss = torch.nn.functional.cross_entropy(unnormalized_features, targets, reduction="sum")
+            loss = torch.nn.functional.cross_entropy(
+                unnormalized_features, targets, reduction="sum"
+            )
 
             predicted = torch.max(unnormalized_features.data, 1)[1]
 
@@ -48,10 +52,10 @@ def validation(validation_data_loader: torch.utils.data.DataLoader, model: Super
 
 
 def learning(
-        cfg: OmegaConf,
-        training_data_loader: torch.utils.data.DataLoader,
-        validation_data_loader: torch.utils.data.DataLoader,
-        model: SupervisedModel,
+    cfg: OmegaConf,
+    training_data_loader: torch.utils.data.DataLoader,
+    validation_data_loader: torch.utils.data.DataLoader,
+    model: SupervisedModel,
 ) -> None:
     """
     Learning function including evaluation
@@ -82,15 +86,14 @@ def learning(
         lr=calculate_initial_lr(cfg),
         momentum=cfg["optimizer"]["momentum"],
         nesterov=False,
-        weight_decay=cfg["optimizer"]["decay"]
+        weight_decay=cfg["optimizer"]["decay"],
     )
 
     # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
     optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
     cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer.optim,
-        T_max=total_steps - warmup_steps,
+        optimizer.optim, T_max=total_steps - warmup_steps,
     )
 
     for epoch in range(1, epochs + 1):
@@ -119,10 +122,16 @@ def learning(
 
         if local_rank == 0:
             logger_line = "Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
-                epoch, epochs, epoch / epochs, loss.item(), optimizer.param_groups[0]["lr"]
+                epoch,
+                epochs,
+                epoch / epochs,
+                loss.item(),
+                optimizer.param_groups[0]["lr"],
             )
 
-        sum_val_loss, num_val_corrects = validation(validation_data_loader, model, local_rank)
+        sum_val_loss, num_val_corrects = validation(
+            validation_data_loader, model, local_rank
+        )
 
         torch.distributed.barrier()
         torch.distributed.reduce(sum_val_loss, dst=0)
@@ -139,7 +148,7 @@ def learning(
                 metric = validation_loss
             else:
                 # store metric as risk: 1 - accuracy
-                metric = 1. - validation_acc
+                metric = 1.0 - validation_acc
 
             if metric <= best_metric:
                 # delete old checkpoint file
@@ -152,14 +161,17 @@ def learning(
                 best_metric = metric
 
             logging.info(
-                logger_line + " val loss:{:.3f}, val acc:{:.2f}%".format(validation_loss, validation_acc * 100.)
+                logger_line
+                + " val loss:{:.3f}, val acc:{:.2f}%".format(
+                    validation_loss, validation_acc * 100.0
+                )
             )
 
     if local_rank == 0:
         if cfg["parameter"]["metric"] == "loss":
             logging_line = "best val loss:{:.7f}%".format(best_metric)
         else:
-            logging_line = "best val acc:{:.2f}%".format((1. - best_metric) * 100)
+            logging_line = "best val acc:{:.2f}%".format((1.0 - best_metric) * 100)
 
         logging.info(logging_line)
 
@@ -179,10 +191,15 @@ def learning(
     torch.distributed.barrier()
     if cfg["parameter"]["save_predictions"]:
         model.load_state_dict(
-            torch.load(cfg["experiment"]["output_model_name"], map_location={'cuda:%d' % 0: 'cuda:%d' % local_rank}))
+            torch.load(
+                cfg["experiment"]["output_model_name"],
+                map_location={"cuda:%d" % 0: "cuda:%d" % local_rank},
+            )
+        )
 
-        ys, ys_pred = make_two_vector_for_confusion_matrix(validation_data_loader, local_rank, model, None,
-                                                           normalized=False)
+        ys, ys_pred = make_two_vector_for_confusion_matrix(
+            validation_data_loader, local_rank, model, None, normalized=False
+        )
 
         np.save(file=f"y_{local_rank}.npy", arr=np.array(ys))
         np.save(file=f"y_{local_rank}_pred.npy", arr=np.array(ys_pred))
@@ -217,21 +234,33 @@ def main(cfg: OmegaConf):
     num_classes = get_num_classes(cfg["dataset"]["name"])
     is_cifar = "cifar" in cfg["dataset"]["name"]
 
-    training_transform = create_simclr_data_augmentation(cfg["dataset"]["strength"], size=cfg["dataset"]["size"])
-    val_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), ])
+    training_transform = create_simclr_data_augmentation(
+        cfg["dataset"]["strength"], size=cfg["dataset"]["size"]
+    )
+    val_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),])
 
-    training_dataset, validation_dataset = fetch_dataset(dataset_name, training_transform, val_transform)
+    training_dataset, validation_dataset = fetch_dataset(
+        dataset_name, training_transform, val_transform
+    )
     training_data_loader, validation_data_loader = create_data_loaders(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
         training_dataset=training_dataset,
-        validation_dataset=validation_dataset
+        validation_dataset=validation_dataset,
     )
 
     if rank == 0:
-        logger.info("#train: {}, #val: {}".format(len(training_dataset), len(validation_dataset)))
+        logger.info(
+            "#train: {}, #val: {}".format(
+                len(training_dataset), len(validation_dataset)
+            )
+        )
 
-    model = SupervisedModel(base_cnn=cfg["architecture"]["base_cnn"], num_classes=num_classes, is_cifar=is_cifar)
+    model = SupervisedModel(
+        base_cnn=cfg["architecture"]["base_cnn"],
+        num_classes=num_classes,
+        is_cifar=is_cifar,
+    )
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = model.to(rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])

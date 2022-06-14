@@ -7,17 +7,13 @@ import torch
 import torchvision
 import yaml
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
-
 from src.check_hydra_conf import check_hydra_conf
 from src.data.dataset import DownstreamDataset
 from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import create_data_loaders
-from src.data.utils import fetch_dataset
-from src.data.utils import get_num_classes
-from src.eval_utils import convert_vectors, centroid_eval
-from src.model import CentroidClassifier
-from src.model import ContrastiveModel
+from src.data.utils import create_data_loaders, fetch_dataset, get_num_classes
+from src.eval_utils import centroid_eval, convert_vectors
+from src.model import CentroidClassifier, ContrastiveModel
+from torch.utils.data import DataLoader
 
 
 @hydra.main(config_path="conf", config_name="eval_config")
@@ -64,21 +60,29 @@ def main(cfg: OmegaConf):
     training_transform = create_simclr_data_augmentation(
         self_sup_conf["dataset"]["strength"], self_sup_conf["dataset"]["size"]
     )
-    val_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), ])
+    val_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),])
 
-    training_dataset, validation_dataset = fetch_dataset(dataset_name, training_transform, val_transform,
-                                                         include_val=True)
-
-    training_data_loader, validation_data_loader = create_data_loaders(
-        num_workers=cfg["experiment"]["num_workers"], batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset, validation_dataset=validation_dataset, train_drop_last=False,
-        distributed=False
+    training_dataset, validation_dataset = fetch_dataset(
+        dataset_name, training_transform, val_transform, include_val=True
     )
 
-    logger.info("#train: {}, #val: {}".format(len(training_dataset), len(validation_dataset)))
+    training_data_loader, validation_data_loader = create_data_loaders(
+        num_workers=cfg["experiment"]["num_workers"],
+        batch_size=cfg["experiment"]["batches"],
+        training_dataset=training_dataset,
+        validation_dataset=validation_dataset,
+        train_drop_last=False,
+        distributed=False,
+    )
+
+    logger.info(
+        "#train: {}, #val: {}".format(len(training_dataset), len(validation_dataset))
+    )
 
     model = ContrastiveModel(
-        base_cnn=self_sup_conf["architecture"]["base_cnn"], d=self_sup_conf["parameter"]["d"], is_cifar=is_cifar
+        base_cnn=self_sup_conf["architecture"]["base_cnn"],
+        d=self_sup_conf["parameter"]["d"],
+        is_cifar=is_cifar,
     )
 
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -102,7 +106,9 @@ def main(cfg: OmegaConf):
     downstream_training_dataset = DownstreamDataset(x, y)
 
     classifier = CentroidClassifier(
-        weights=CentroidClassifier.create_weights(downstream_training_dataset, num_classes=num_classes).to(device)
+        weights=CentroidClassifier.create_weights(
+            downstream_training_dataset, num_classes=num_classes
+        ).to(device)
     )
 
     # create data_loader for centroids classifier's input
@@ -110,22 +116,30 @@ def main(cfg: OmegaConf):
     downstream_val_dataset = DownstreamDataset(x, y)
 
     downstream_training_data_loader = DataLoader(
-        dataset=downstream_training_dataset, batch_size=cfg["experiment"]["batches"], shuffle=False,
+        dataset=downstream_training_dataset,
+        batch_size=cfg["experiment"]["batches"],
+        shuffle=False,
     )
     downstream_val_data_loader = DataLoader(
-        dataset=downstream_val_dataset, batch_size=cfg["experiment"]["batches"], shuffle=False,
+        dataset=downstream_val_dataset,
+        batch_size=cfg["experiment"]["batches"],
+        shuffle=False,
     )
 
     top_k = min(cfg["experiment"]["top_k"], num_classes)
-    train_acc, train_top_k_acc = centroid_eval(downstream_training_data_loader, device, classifier, top_k)
-    val_acc, val_top_k_acc = centroid_eval(downstream_val_data_loader, device, classifier, top_k)
+    train_acc, train_top_k_acc = centroid_eval(
+        downstream_training_data_loader, device, classifier, top_k
+    )
+    val_acc, val_top_k_acc = centroid_eval(
+        downstream_val_data_loader, device, classifier, top_k
+    )
 
     classification_results = {}
     classification_results[weight_name] = {
         "train_acc": train_acc,
         "train_top_{}_acc".format(top_k): train_top_k_acc,
         "val_acc": val_acc,
-        "val_top_{}_acc".format(top_k): val_top_k_acc
+        "val_top_{}_acc".format(top_k): val_top_k_acc,
     }
     logger.info("train acc: {}, val acc: {}".format(train_acc, val_acc))
 

@@ -6,8 +6,7 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from .model import CentroidClassifier
-from .model import ContrastiveModel
+from .model import CentroidClassifier, ContrastiveModel
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -18,7 +17,10 @@ logger.addHandler(stream_handler)
 
 
 def centroid_eval(
-        data_loader: DataLoader, device: torch.device, classifier: CentroidClassifier, top_k: int = 5
+    data_loader: DataLoader,
+    device: torch.device,
+    classifier: CentroidClassifier,
+    top_k: int = 5,
 ) -> tuple:
     """
     :param data_loader: DataLoader of downstream task.
@@ -47,7 +49,10 @@ def centroid_eval(
 
 
 def convert_vectors(
-        data_loader: torch.utils.data.DataLoader, model: ContrastiveModel, device: torch.device, normalized: bool
+    data_loader: torch.utils.data.DataLoader,
+    model: ContrastiveModel,
+    device: torch.device,
+    normalized: bool,
 ) -> tuple:
     """
     Convert experiment to feature representations.
@@ -78,8 +83,14 @@ def convert_vectors(
     return X, y
 
 
-def calculate_accuracies_loss(classifier, encoder: ContrastiveModel, data_loader: DataLoader, device: torch.device,
-                              top_k: int = 5, normalized=False) -> tuple:
+def calculate_accuracies_loss(
+    classifier,
+    encoder: ContrastiveModel,
+    data_loader: DataLoader,
+    device: torch.device,
+    top_k: int = 5,
+    normalized=False,
+) -> tuple:
     """
     Auxiliary function to calculate accuracies and loss.
     :param classifier: Instance of classifier. Either linear or nonlinear.
@@ -92,7 +103,7 @@ def calculate_accuracies_loss(classifier, encoder: ContrastiveModel, data_loader
     """
 
     classifier.eval()
-    total_loss = 0.
+    total_loss = 0.0
     top_1_correct = 0
     top_k_correct = 0
 
@@ -121,8 +132,12 @@ def calculate_accuracies_loss(classifier, encoder: ContrastiveModel, data_loader
 
 
 def learnable_eval(
-        cfg: OmegaConf, classifier, encoder: ContrastiveModel, training_data_loader: DataLoader,
-        val_data_loader: DataLoader, top_k: int,
+    cfg: OmegaConf,
+    classifier,
+    encoder: ContrastiveModel,
+    training_data_loader: DataLoader,
+    val_data_loader: DataLoader,
+    top_k: int,
 ) -> tuple:
     """
     :param cfg: Hydra's config instance.
@@ -146,10 +161,12 @@ def learnable_eval(
         lr=cfg["optimizer"]["lr"],
         momentum=cfg["optimizer"]["momentum"],
         nesterov=True,
-        weight_decay=cfg["optimizer"]["decay"]
+        weight_decay=cfg["optimizer"]["decay"],
     )
 
-    cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0.)
+    cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=epochs, eta_min=0.0
+    )
 
     train_accuracies = []
     train_top_k_accuracies = []
@@ -161,7 +178,7 @@ def learnable_eval(
     num_train = len(training_data_loader.dataset)
     num_val = len(val_data_loader.dataset)
 
-    highest_val_acc = 0.
+    highest_val_acc = 0.0
 
     encoder.eval()
     for epoch in range(1, epochs + 1):
@@ -184,12 +201,16 @@ def learnable_eval(
             loss.backward()
             optimizer.step()
 
-
         cos_lr_scheduler.step()
 
         # train and val metrics
         train_acc, train_top_k_acc, train_loss = calculate_accuracies_loss(
-            classifier, encoder, training_data_loader, local_rank, top_k=top_k, normalized=normalized
+            classifier,
+            encoder,
+            training_data_loader,
+            local_rank,
+            top_k=top_k,
+            normalized=normalized,
         )
 
         torch.distributed.barrier()
@@ -198,7 +219,12 @@ def learnable_eval(
         torch.distributed.reduce(train_loss, dst=0)
 
         val_acc, val_top_k_acc, val_loss = calculate_accuracies_loss(
-            classifier, encoder, val_data_loader, local_rank, top_k=top_k, normalized=normalized
+            classifier,
+            encoder,
+            val_data_loader,
+            local_rank,
+            top_k=top_k,
+            normalized=normalized,
         )
 
         torch.distributed.barrier()
@@ -220,8 +246,10 @@ def learnable_eval(
 
             current_lr = optimizer.param_groups[0]["lr"]
             current_progress = epoch / epochs
-            logging.info(f"Epoch:{epoch}/{epochs} progress:{current_progress:.2f}, train acc.:{train_acc * 100.:.1f} "
-                         f"val acc.:{val_acc * 100.:.1f} lr:{current_lr:.4f}")
+            logging.info(
+                f"Epoch:{epoch}/{epochs} progress:{current_progress:.2f}, train acc.:{train_acc * 100.:.1f} "
+                f"val acc.:{val_acc * 100.:.1f} lr:{current_lr:.4f}"
+            )
 
         if highest_val_acc < val_acc and local_rank == 0:
             # save best linear classifier on validation dataset
@@ -232,15 +260,27 @@ def learnable_eval(
                 if os.path.exists(save_fname):
                     os.remove(save_fname)
 
-            save_fname = "epoch_{}-{}".format(epoch, cfg["experiment"]["output_model_name"])
+            save_fname = "epoch_{}-{}".format(
+                epoch, cfg["experiment"]["output_model_name"]
+            )
             torch.save(classifier.state_dict(), save_fname)
 
-    return train_accuracies, train_top_k_accuracies, train_losses, val_accuracies, val_top_k_accuracies, val_losses
+    return (
+        train_accuracies,
+        train_top_k_accuracies,
+        train_losses,
+        val_accuracies,
+        val_top_k_accuracies,
+        val_losses,
+    )
 
 
 def make_two_vector_for_confusion_matrix(
-        data_loader: DataLoader, device: torch.device, classifier: CentroidClassifier, encoder: ContrastiveModel = None,
-        normalized: bool = True
+    data_loader: DataLoader,
+    device: torch.device,
+    classifier: CentroidClassifier,
+    encoder: ContrastiveModel = None,
+    normalized: bool = True,
 ) -> tuple:
     """
     Create two categorical vectors to plot confusion matrix for classifier predictions.

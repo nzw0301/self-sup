@@ -7,13 +7,16 @@ import torch
 import torchvision
 import yaml
 from omegaconf import OmegaConf
-
-from src.data.utils import fetch_dataset, create_data_loaders
 from src.data.transforms import create_simclr_data_augmentation
+from src.data.utils import create_data_loaders, fetch_dataset
 from src.model import ContrastiveModel
 
 
-def convert_vectors(data_loader: torch.utils.data.DataLoader, model: ContrastiveModel, device: torch.device) -> tuple:
+def convert_vectors(
+    data_loader: torch.utils.data.DataLoader,
+    model: ContrastiveModel,
+    device: torch.device,
+) -> tuple:
     """
     Convert images to feature representations.
 
@@ -64,13 +67,18 @@ def main(cfg: OmegaConf):
     is_cifar = "cifar" in dataset_name
 
     # initialise data loaders
-    transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), ])
+    transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),])
 
-    training_dataset, validation_dataset = fetch_dataset(dataset_name, transform, transform, include_val=True)
+    training_dataset, validation_dataset = fetch_dataset(
+        dataset_name, transform, transform, include_val=True
+    )
     training_data_loader, validation_data_loader = create_data_loaders(
-        num_workers=cfg["experiment"]["num_workers"], batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset, validation_dataset=validation_dataset, train_drop_last=False,
-        distributed=False
+        num_workers=cfg["experiment"]["num_workers"],
+        batch_size=cfg["experiment"]["batches"],
+        training_dataset=training_dataset,
+        validation_dataset=validation_dataset,
+        train_drop_last=False,
+        distributed=False,
     )
 
     weights_path = Path(cfg["experiment"]["target_weight_file"])
@@ -83,8 +91,9 @@ def main(cfg: OmegaConf):
         self_sup_conf = yaml.load(f, Loader=yaml.FullLoader)
 
         model = ContrastiveModel(
-            base_cnn=self_sup_conf["architecture"]["base_cnn"], d=self_sup_conf["parameter"]["d"],
-            is_cifar=is_cifar
+            base_cnn=self_sup_conf["architecture"]["base_cnn"],
+            d=self_sup_conf["parameter"]["d"],
+            is_cifar=is_cifar,
         )
 
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -119,11 +128,16 @@ def main(cfg: OmegaConf):
         self_sup_conf["dataset"]["strength"], self_sup_conf["dataset"]["size"]
     )
 
-    training_dataset, validation_dataset = fetch_dataset(dataset_name, transform, transform, include_val=True)
+    training_dataset, validation_dataset = fetch_dataset(
+        dataset_name, transform, transform, include_val=True
+    )
     training_data_loader, validation_data_loader = create_data_loaders(
-        num_workers=cfg["experiment"]["num_workers"], batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset, validation_dataset=validation_dataset, train_drop_last=False,
-        distributed=False
+        num_workers=cfg["experiment"]["num_workers"],
+        batch_size=cfg["experiment"]["batches"],
+        training_dataset=training_dataset,
+        validation_dataset=validation_dataset,
+        train_drop_last=False,
+        distributed=False,
     )
 
     for a in range(2):

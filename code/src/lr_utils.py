@@ -13,7 +13,7 @@ def calculate_initial_lr(cfg: OmegaConf) -> float:
     """
 
     if cfg["optimizer"]["linear_schedule"]:
-        scaled_lr = cfg["optimizer"]["lr"] * cfg["experiment"]["batches"] / 256.
+        scaled_lr = cfg["optimizer"]["lr"] * cfg["experiment"]["batches"] / 256.0
     else:
         scaled_lr = cfg["optimizer"]["lr"] * np.sqrt(cfg["experiment"]["batches"])
 
@@ -31,7 +31,7 @@ def calculate_warmup_lr(cfg: OmegaConf, warmup_steps: int, current_step: int) ->
 
     initial_lr = calculate_initial_lr(cfg)
 
-    if warmup_steps > 0.:
+    if warmup_steps > 0.0:
         learning_rate = current_step / warmup_steps * initial_lr
     else:
         learning_rate = initial_lr

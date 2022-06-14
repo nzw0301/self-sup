@@ -5,19 +5,19 @@ import numpy as np
 import torch
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
-
 from src.check_hydra_conf import check_hydra_conf
 from src.data.transforms import SimCLRTransforms
-from src.data.utils import create_data_loaders
-from src.data.utils import fetch_dataset
+from src.data.utils import create_data_loaders, fetch_dataset
 from src.distributed_utils import init_ddp
 from src.loss import NT_Xent
-from src.lr_utils import calculate_warmup_lr, calculate_initial_lr
+from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
 from src.model import ContrastiveModel
+from torch.utils.data import DataLoader
 
 
-def exclude_from_wt_decay(named_params, weight_decay, skip_list=("bias", "bn")) -> tuple:
+def exclude_from_wt_decay(
+    named_params, weight_decay, skip_list=("bias", "bn")
+) -> tuple:
     """
     :param named_params: Model's named_params.
     :param weight_decay: weight_decay's parameter.
@@ -39,10 +39,17 @@ def exclude_from_wt_decay(named_params, weight_decay, skip_list=("bias", "bn")) 
         else:
             params.append(param)
 
-    return {"params": params, "weight_decay": weight_decay}, {"params": excluded_params, "weight_decay": 0.}
+    return (
+        {"params": params, "weight_decay": weight_decay},
+        {"params": excluded_params, "weight_decay": 0.0},
+    )
 
 
-def train(cfg: OmegaConf, training_data_loader: torch.utils.data.DataLoader, model: ContrastiveModel,) -> None:
+def train(
+    cfg: OmegaConf,
+    training_data_loader: torch.utils.data.DataLoader,
+    model: ContrastiveModel,
+) -> None:
     """
     Training function.
 
@@ -65,19 +72,20 @@ def train(cfg: OmegaConf, training_data_loader: torch.utils.data.DataLoader, mod
     )
 
     optimizer = torch.optim.SGD(
-        params=exclude_from_wt_decay(model.named_parameters(), weight_decay=cfg["optimizer"]["decay"]),
+        params=exclude_from_wt_decay(
+            model.named_parameters(), weight_decay=cfg["optimizer"]["decay"]
+        ),
         lr=calculate_initial_lr(cfg),
         momentum=cfg["optimizer"]["momentum"],
         nesterov=False,
-        weight_decay=0.
+        weight_decay=0.0,
     )
 
     # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
     optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
     cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer.optim,
-        T_max=total_steps - warmup_steps,
+        optimizer.optim, T_max=total_steps - warmup_steps,
     )
 
     for epoch in range(1, epochs + 1):
@@ -104,12 +112,20 @@ def train(cfg: OmegaConf, training_data_loader: torch.utils.data.DataLoader, mod
             current_step += 1
 
         if local_rank == 0:
-            logging.info("Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
-                epoch, epochs, epoch / epochs, loss.item(), optimizer.param_groups[0]["lr"]
-            ))
+            logging.info(
+                "Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
+                    epoch,
+                    epochs,
+                    epoch / epochs,
+                    loss.item(),
+                    optimizer.param_groups[0]["lr"],
+                )
+            )
 
             if epoch % cfg["experiment"]["save_model_epoch"] == 0 or epoch == epochs:
-                save_fname = "epoch_{}-{}".format(epoch, cfg["experiment"]["output_model_name"])
+                save_fname = "epoch_{}-{}".format(
+                    epoch, cfg["experiment"]["output_model_name"]
+                )
                 torch.save(model.state_dict(), save_fname)
 
 
@@ -135,8 +151,11 @@ def main(cfg: OmegaConf):
     rank = cfg["distributed"]["local_rank"]
     logger.info("Using {}".format(rank))
 
-    transform = SimCLRTransforms(strength=cfg["dataset"]["strength"], size=cfg["dataset"]["size"],
-                                 num_views=cfg["dataset"]["num_views"])
+    transform = SimCLRTransforms(
+        strength=cfg["dataset"]["strength"],
+        size=cfg["dataset"]["size"],
+        num_views=cfg["dataset"]["num_views"],
+    )
 
     dataset_name = cfg["dataset"]["name"].lower()
 
@@ -146,7 +165,7 @@ def main(cfg: OmegaConf):
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
         training_dataset=training_dataset,
-        validation_dataset=None
+        validation_dataset=None,
     )[0]
 
     is_cifar = "cifar" in cfg["dataset"]["name"]
@@ -154,7 +173,11 @@ def main(cfg: OmegaConf):
     if rank == 0:
         logger.info("#train: {}".format(len(training_data_loader.dataset)))
 
-    model = ContrastiveModel(base_cnn=cfg["architecture"]["base_cnn"], d=cfg["parameter"]["d"], is_cifar=is_cifar)
+    model = ContrastiveModel(
+        base_cnn=cfg["architecture"]["base_cnn"],
+        d=cfg["parameter"]["d"],
+        is_cifar=is_cifar,
+    )
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = model.to(rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])

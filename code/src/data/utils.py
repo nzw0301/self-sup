@@ -3,8 +3,14 @@ import torchvision
 from torch.utils.data import DataLoader
 
 
-def create_data_loaders(num_workers: int, batch_size: int, training_dataset=None, validation_dataset=None,
-                        train_drop_last: bool = True, distributed: bool = True):
+def create_data_loaders(
+    num_workers: int,
+    batch_size: int,
+    training_dataset=None,
+    validation_dataset=None,
+    train_drop_last: bool = True,
+    distributed: bool = True,
+):
     """
     :param num_workers: the number of workers for data loader
     :param batch_size: the mini-batch size
@@ -22,11 +28,18 @@ def create_data_loaders(num_workers: int, batch_size: int, training_dataset=None
         sampler = None
 
         if distributed:
-            sampler = torch.utils.data.distributed.DistributedSampler(training_dataset, shuffle=True)
+            sampler = torch.utils.data.distributed.DistributedSampler(
+                training_dataset, shuffle=True
+            )
 
-        training_data_loader = DataLoader(dataset=training_dataset, sampler=sampler, num_workers=num_workers,
-                                          batch_size=batch_size, pin_memory=True, drop_last=train_drop_last,
-                                          )
+        training_data_loader = DataLoader(
+            dataset=training_dataset,
+            sampler=sampler,
+            num_workers=num_workers,
+            batch_size=batch_size,
+            pin_memory=True,
+            drop_last=train_drop_last,
+        )
         data_loaders.append(training_data_loader)
 
     if validation_dataset is not None:
@@ -34,12 +47,18 @@ def create_data_loaders(num_workers: int, batch_size: int, training_dataset=None
         validation_sampler = None
 
         if distributed:
-            validation_sampler = torch.utils.data.distributed.DistributedSampler(validation_dataset, shuffle=False)
+            validation_sampler = torch.utils.data.distributed.DistributedSampler(
+                validation_dataset, shuffle=False
+            )
 
-        validation_data_loader = DataLoader(dataset=validation_dataset, sampler=validation_sampler,
-                                            num_workers=num_workers, batch_size=batch_size, pin_memory=True,
-                                            drop_last=False,
-                                            )
+        validation_data_loader = DataLoader(
+            dataset=validation_dataset,
+            sampler=validation_sampler,
+            num_workers=num_workers,
+            batch_size=batch_size,
+            pin_memory=True,
+            drop_last=False,
+        )
         data_loaders.append(validation_data_loader)
 
     return data_loaders
