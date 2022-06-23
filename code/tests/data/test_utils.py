@@ -25,7 +25,7 @@ def test_train_val_split():
     assert len(train) == int(num_original_samples * (1.0 - ratio))
     assert len(val) == int(num_original_samples * ratio)
 
-    # reproducibility
+    # Reproducibility
     diff_train, diff_val = _train_val_split(
         rnd=np.random.RandomState(seed),
         train_dataset=train_data,
@@ -34,7 +34,7 @@ def test_train_val_split():
     np.testing.assert_array_equal(diff_train.targets, train.targets)
     np.testing.assert_array_equal(diff_val.targets, val.targets)
 
-    # different seed generates different split
+    # Different seed generates different splits.
     diff_seed = seed + 1
     diff_train, diff_val = _train_val_split(
         rnd=np.random.RandomState(diff_seed),
@@ -65,7 +65,7 @@ def test_get_train_val_test_datasets():
     assert len(val) == int(num_original_train_samples * ratio)
     assert len(test) == num_original_test_samples
 
-    # reproducibility
+    # For reproducibility.
     rnd = np.random.RandomState(seed)
     diff_train, diff_val, diff_test = get_train_val_test_datasets(
         rnd=rnd, validation_ratio=ratio, dataset_name="cifar10"
@@ -74,7 +74,7 @@ def test_get_train_val_test_datasets():
     np.testing.assert_array_equal(diff_val.targets, val.targets)
     np.testing.assert_array_equal(diff_test.targets, test.targets)
 
-    # different seed generates different split
+    # Different seed generates different splits.
     rnd = np.random.RandomState(seed + 1)
     diff_train, diff_val, diff_test = get_train_val_test_datasets(
         rnd=rnd, validation_ratio=ratio, dataset_name="cifar10"
@@ -84,7 +84,7 @@ def test_get_train_val_test_datasets():
     # test dataset should not change by train/val split.
     np.testing.assert_array_equal(diff_test.targets, test.targets)
 
-    # if ration = 0, validation set is None:
+    # if ratio = 0, validation set is None.
     train, val, test = get_train_val_test_datasets(
         rnd=rnd, validation_ratio=0.0, dataset_name="cifar10"
     )
@@ -122,7 +122,7 @@ def test_create_data_loaders_from_datasets():
     assert val_loader.batch_size == 2
     assert test_loader.batch_size == 3
 
-    # only train dataloader
+    # Only train dataloader.
     loaders = create_data_loaders_from_datasets(
         num_workers=num_workers,
         train_batch_size=1,
