@@ -16,15 +16,16 @@ from src.eval_utils import make_two_vector_for_confusion_matrix
 from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
 from src.model import SupervisedModel
 from torch.utils.data import DataLoader
+from typing import Tuple
 
 
 def validation(
     validation_data_loader: torch.utils.data.DataLoader,
     model: SupervisedModel,
     local_rank: int,
-) -> tuple:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    :param validation_data_loader: Validation data loader
+    :param validation_data_loader: Validation data loader.
     :param model: ResNet based classifier.
     :param local_rank: local rank.
     :return: validation loss, the number of corrected samples, and the size of samples on a local
@@ -58,12 +59,13 @@ def learning(
     model: SupervisedModel,
 ) -> None:
     """
-    Learning function including evaluation
+    Learning function including evaluation.
 
-    :param cfg: Hydra's config instance
-    :param training_data_loader: Training data loader
-    :param validation_data_loader: Validation data loader
+    :param cfg: Hydra's config instance.
+    :param training_data_loader: Training data loader.
+    :param validation_data_loader: Validation data loader.
     :param model: `SupervisedModel`'s instance.
+
     :return: None
     """
 
@@ -92,17 +94,17 @@ def learning(
     # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
     optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
+    # TODO(nzw): fix this part by following SWaV's way.
     cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer.optim, T_max=total_steps - warmup_steps,
     )
 
     for epoch in range(1, epochs + 1):
-        # training
         model.train()
         training_data_loader.sampler.set_epoch(epoch)
 
         for data, targets in training_data_loader:
-            # adjust learning rate by applying linear warming
+            # adjust learning rate by applying linear warming.
             if current_step <= warmup_steps:
                 lr = calculate_warmup_lr(cfg, warmup_steps, current_step)
                 for param_group in optimizer.param_groups:
@@ -114,19 +116,18 @@ def learning(
             loss.backward()
             optimizer.step()
 
-            # adjust learning rate by applying cosine annealing
+            # adjust learning rate by applying cosine annealing.
             if current_step > warmup_steps:
                 cos_lr_scheduler.step()
 
             current_step += 1
 
         if local_rank == 0:
+            progress = epoch / epochs
+            lr_for_logging = optimizer.param_groups[0]["lr"]
+
             logger_line = "Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
-                epoch,
-                epochs,
-                epoch / epochs,
-                loss.item(),
-                optimizer.param_groups[0]["lr"],
+                epoch, epochs, progress, loss.item(), lr_for_logging,
             )
 
         sum_val_loss, num_val_corrects = validation(
@@ -169,9 +170,9 @@ def learning(
 
     if local_rank == 0:
         if cfg["parameter"]["metric"] == "loss":
-            logging_line = "best val loss:{:.7f}%".format(best_metric)
+            logging_line = f"best val loss:{best_metric:.7f}%"
         else:
-            logging_line = "best val acc:{:.2f}%".format((1.0 - best_metric) * 100)
+            logging_line = f"best val acc:{(1.0 - best_metric) * 100:.2f}%"
 
         logging.info(logging_line)
 
@@ -188,22 +189,6 @@ def learning(
         with open(fname, "w") as f:
             json.dump(supervised_results, f)
 
-    torch.distributed.barrier()
-    if cfg["parameter"]["save_predictions"]:
-        model.load_state_dict(
-            torch.load(
-                cfg["experiment"]["output_model_name"],
-                map_location={"cuda:%d" % 0: "cuda:%d" % local_rank},
-            )
-        )
-
-        ys, ys_pred = make_two_vector_for_confusion_matrix(
-            validation_data_loader, local_rank, model, None, normalized=False
-        )
-
-        np.save(file=f"y_{local_rank}.npy", arr=np.array(ys))
-        np.save(file=f"y_{local_rank}_pred.npy", arr=np.array(ys_pred))
-
 
 @hydra.main(config_path="conf", config_name="supervised_config")
 def main(cfg: OmegaConf):
@@ -217,9 +202,8 @@ def main(cfg: OmegaConf):
     check_hydra_conf(cfg)
     init_ddp(cfg)
 
-    # fix seed
+    # reproducibility
     seed = cfg["experiment"]["seed"]
-    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
