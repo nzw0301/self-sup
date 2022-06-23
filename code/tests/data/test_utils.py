@@ -84,6 +84,14 @@ def test_get_train_val_test_datasets():
     # test dataset should not change by train/val split.
     np.testing.assert_array_equal(diff_test.targets, test.targets)
 
+    # if ration = 0, validation set is None:
+    train, val, test = get_train_val_test_datasets(
+        rnd=rnd, validation_ratio=0.0, dataset_name="cifar10"
+    )
+    assert len(train) == num_original_train_samples
+    assert val is None
+    assert len(test) == num_original_test_samples
+
 
 def test_create_data_loaders_from_datasets():
     num_original_train_samples = 50_000

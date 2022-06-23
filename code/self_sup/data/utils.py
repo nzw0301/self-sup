@@ -9,6 +9,34 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR10, CIFAR100
 
 
+def _get_data_loader(
+    dataset: torch.utils.data.Dataset,
+    num_workers: int,
+    batch_size: int,
+    ddp_sampler_seed: int,
+    distributed: bool,
+    drop_last: bool,
+) -> torch.utils.data.DataLoader:
+    # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
+    sampler = (
+        torch.utils.data.distributed.DistributedSampler(
+            dataset, shuffle=True, drop_last=drop_last, seed=ddp_sampler_seed
+        )
+        if distributed
+        else None
+    )
+
+    return DataLoader(
+        dataset=dataset,
+        shuffle=(sampler is None),
+        sampler=sampler,
+        num_workers=num_workers,
+        batch_size=batch_size,
+        pin_memory=True,
+        drop_last=drop_last,
+    )
+
+
 def create_data_loaders_from_datasets(
     num_workers: int,
     train_batch_size: Optional[int] = None,
@@ -21,6 +49,8 @@ def create_data_loaders_from_datasets(
     distributed: bool = True,
 ) -> List[torch.utils.data.DataLoader]:
     """
+    Given pytorch datasets, create data loaders.
+
     :param num_workers: The number of workers for returned dataloaders.
     :param train_batch_size: The mini-batch size of train dataloader.
     :param validation_batch_size: The mini-batch size of validation dataloader.
@@ -34,34 +64,6 @@ def create_data_loaders_from_datasets(
     :return: list of DataLoaders.
     """
     data_loaders = []
-
-    def _get_data_loader(
-        dataset: torch.utils.data.Dataset,
-        num_workers: int,
-        batch_size: int,
-        ddp_sampler_seed: int,
-        distributed: bool,
-        drop_last: bool,
-    ) -> torch.utils.data.DataLoader:
-
-        # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
-        sampler = (
-            torch.utils.data.distributed.DistributedSampler(
-                dataset, shuffle=True, drop_last=drop_last, seed=ddp_sampler_seed
-            )
-            if distributed
-            else None
-        )
-
-        return DataLoader(
-            dataset=dataset,
-            shuffle=(sampler is None),
-            sampler=sampler,
-            num_workers=num_workers,
-            batch_size=batch_size,
-            pin_memory=True,
-            drop_last=drop_last,
-        )
 
     if train_dataset is not None:
         data_loaders.append(
@@ -99,10 +101,13 @@ def _train_val_split(
     validation_ratio: float = 0.05,
 ) -> Tuple[torch.utils.data.Dataset, torch.utils.data.Dataset]:
     """
-    Apply sklearn's `train_val_split` function to PyTorch's dataset instance.
+    Apply sklearn's `train_val_split` function to PyTorch's dataset instance to split train dataset into tow disjoint
+    dataset: "new" train dataset and validation dataset.
+
     :param rnd: `np.random.RandomState` instance for reproducibility of train/val split.
     :param train_dataset: Training set that is an instance of PyTorch's dataset.
     :param validation_ratio: The ratio of validation data.
+
     :return: Tuple of training set and validation set.
     """
 
@@ -135,12 +140,13 @@ def get_train_val_test_datasets(
     dataset_name: str = "cifar100",
     normalize: bool = False,
 ) -> Tuple[
+    Union[CIFAR10, CIFAR100],
     Optional[Union[CIFAR10, CIFAR100]],
-    Optional[Union[CIFAR10, CIFAR100]],
-    Optional[Union[CIFAR10, CIFAR100]],
+    Union[CIFAR10, CIFAR100],
 ]:
     """
-    Create CIFAR-10/100 train/val/test data loaders
+    Create CIFAR-10/100 train/val/test data loaders.
+    If `validation_ratio` is non-positive, the retuned validation set is `None`.
 
     :param rnd: `np.random.RandomState` instance.
     :param validation_ratio: The ratio of validation data. If this value is `0.`, returned `val_set` is `None`.
