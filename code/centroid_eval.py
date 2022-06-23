@@ -9,12 +9,16 @@ import yaml
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
-from src.check_hydra_conf import check_hydra_conf
-from src.data.dataset import DownstreamDataset
-from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import create_data_loaders, fetch_dataset, get_num_classes
-from src.eval_utils import centroid_eval, convert_vectors
-from src.model import CentroidClassifier, ContrastiveModel
+from self_sup.check_hydra_conf import check_hydra_conf
+from self_sup.data.dataset import DownstreamDataset
+from self_sup.data.transforms import create_simclr_data_augmentation
+from self_sup.data.utils import (
+    create_data_loaders_from_datasets,
+    fetch_dataset,
+    get_num_classes,
+)
+from self_sup.eval_utils import centroid_eval, convert_vectors
+from self_sup.model import CentroidClassifier, ContrastiveModel
 
 
 @hydra.main(config_path="conf", config_name="eval_config")
@@ -67,7 +71,7 @@ def main(cfg: OmegaConf):
         dataset_name, training_transform, val_transform, include_val=True
     )
 
-    training_data_loader, validation_data_loader = create_data_loaders(
+    training_data_loader, validation_data_loader = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
         train_dataset=training_dataset,

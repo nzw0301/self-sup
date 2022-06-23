@@ -6,14 +6,13 @@ import torch
 import torchvision.transforms as transforms
 from sklearn.model_selection import train_test_split as sk_train_val_split
 from torch.utils.data import DataLoader
-from torchvision.datasets import CIFAR100
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, CIFAR100
 
 
-def create_data_loaders(
+def create_data_loaders_from_datasets(
     num_workers: int,
     train_batch_size: Optional[int] = None,
-    val_batch_size: Optional[int] = None,
+    validation_batch_size: Optional[int] = None,
     test_batch_size: Optional[int] = None,
     ddp_sampler_seed: int = 0,
     train_dataset: Optional[torch.utils.data.Dataset] = None,
@@ -22,18 +21,21 @@ def create_data_loaders(
     distributed: bool = True,
 ) -> List[torch.utils.data.DataLoader]:
     """
-    :param num_workers: the number of workers for data loader.
-    :param batch_size: the mini-batch size.
+    :param num_workers: The number of workers for returned dataloaders.
+    :param train_batch_size: The mini-batch size of train dataloader.
+    :param validation_batch_size: The mini-batch size of validation dataloader.
+    :param test_batch_size: The mini-batch size of test dataloader.
+    :param ddp_sampler_seed: Random seed value of ddp sampler
     :param train_dataset: Dataset instance for training dataset.
     :param validation_dataset: Dataset instance for validation dataset.
     :param test_dataset: Dataset instance for test dataset.
-    :param distributed: whether use DistributedSampler for DDP training or not.
+    :param distributed: Whether or not to use DistributedSampler in dataloader.
 
-    :return: list of DataLoaders
+    :return: list of DataLoaders.
     """
     data_loaders = []
 
-    def get_data_loader(
+    def _get_data_loader(
         dataset: torch.utils.data.Dataset,
         num_workers: int,
         batch_size: int,
@@ -41,13 +43,19 @@ def create_data_loaders(
         distributed: bool,
         drop_last: bool,
     ) -> torch.utils.data.DataLoader:
-        if distributed:
-            sampler = torch.utils.data.distributed.DistributedSampler(
+
+        # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
+        sampler = (
+            torch.utils.data.distributed.DistributedSampler(
                 dataset, shuffle=True, drop_last=drop_last, seed=ddp_sampler_seed
             )
+            if distributed
+            else None
+        )
 
         return DataLoader(
             dataset=dataset,
+            shuffle=(sampler is None),
             sampler=sampler,
             num_workers=num_workers,
             batch_size=batch_size,
@@ -57,27 +65,27 @@ def create_data_loaders(
 
     if train_dataset is not None:
         data_loaders.append(
-            get_data_loader(
-                train_dataset,
-                num_workers,
-                train_batch_size,
-                ddp_sampler_seed,
-                distributed,
+            _get_data_loader(
+                dataset=train_dataset,
+                num_workers=num_workers,
+                batch_size=train_batch_size,
+                ddp_sampler_seed=ddp_sampler_seed,
+                distributed=distributed,
                 drop_last=True,
             )
         )
 
     for dataset, batch_size in zip(
-        (validation_dataset, test_dataset), (val_batch_size, test_batch_size)
+        (validation_dataset, test_dataset), (validation_batch_size, test_batch_size)
     ):
         if dataset is not None:
             data_loaders.append(
-                get_data_loader(
-                    dataset,
-                    num_workers,
-                    batch_size,
-                    ddp_sampler_seed,
-                    distributed,
+                _get_data_loader(
+                    dataset=dataset,
+                    num_workers=num_workers,
+                    batch_size=batch_size,
+                    ddp_sampler_seed=ddp_sampler_seed,
+                    distributed=distributed,
                     drop_last=False,
                 )
             )
@@ -92,11 +100,13 @@ def _train_val_split(
 ) -> Tuple[torch.utils.data.Dataset, torch.utils.data.Dataset]:
     """
     Apply sklearn's `train_val_split` function to PyTorch's dataset instance.
-    :param rnd: `np.random.RandomState` instance.
-    :param train_dataset: Training set. This is an instance of PyTorch's dataset.
+    :param rnd: `np.random.RandomState` instance for reproducibility of train/val split.
+    :param train_dataset: Training set that is an instance of PyTorch's dataset.
     :param validation_ratio: The ratio of validation data.
     :return: Tuple of training set and validation set.
     """
+
+    assert 0.0 < validation_ratio < 1, "validation_ratio ratio should be (0, 1)"
 
     x_train, x_val, y_train, y_val = sk_train_val_split(
         train_dataset.data,
@@ -106,23 +116,24 @@ def _train_val_split(
         stratify=train_dataset.targets,
     )
 
+    sampled_train_dataset = copy.deepcopy(train_dataset)
     val_dataset = copy.deepcopy(train_dataset)
 
-    train_dataset.data = x_train
-    train_dataset.targets = y_train
+    sampled_train_dataset.data = x_train
+    sampled_train_dataset.targets = y_train
 
     val_dataset.data = x_val
     val_dataset.targets = y_val
 
-    return (train_dataset,)
+    return sampled_train_dataset, val_dataset
 
 
 def get_train_val_test_datasets(
     rnd: np.random.RandomState,
-    root="~/pytorch_datasets",
-    validation_ratio=0.05,
-    dataset_name="cifar100",
-    normalize=False,
+    root: str = "~/pytorch_datasets",
+    validation_ratio: float = 0.05,
+    dataset_name: str = "cifar100",
+    normalize: bool = False,
 ) -> Tuple[
     Optional[Union[CIFAR10, CIFAR100]],
     Optional[Union[CIFAR10, CIFAR100]],
@@ -143,7 +154,7 @@ def get_train_val_test_datasets(
     if dataset_name not in {"cifar10", "cifar100"}:
         raise ValueError
 
-    transform = transforms.Compose([transforms.ToTensor(), ])
+    transform = transforms.Compose([transforms.ToTensor(),])
 
     if dataset_name == "cifar10":
         DataSet = CIFAR10
@@ -173,7 +184,7 @@ def get_train_val_test_datasets(
         # end of creating a transform to do pre-processing
 
         transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize(mean, std), ]
+            [transforms.ToTensor(), transforms.Normalize(mean, std),]
         )
 
         train_dataset.transform = transform

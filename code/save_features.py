@@ -8,9 +8,9 @@ import torchvision
 import yaml
 from omegaconf import OmegaConf
 
-from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import create_data_loaders, fetch_dataset
-from src.model import ContrastiveModel
+from self_sup.data.transforms import create_simclr_data_augmentation
+from self_sup.data.utils import create_data_loaders_from_datasets, fetch_dataset
+from self_sup.model import ContrastiveModel
 
 
 def convert_vectors(
@@ -73,7 +73,7 @@ def main(cfg: OmegaConf):
     training_dataset, validation_dataset = fetch_dataset(
         dataset_name, transform, transform, include_val=True
     )
-    training_data_loader, validation_data_loader = create_data_loaders(
+    training_data_loader, validation_data_loader = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
         train_dataset=training_dataset,
@@ -132,7 +132,7 @@ def main(cfg: OmegaConf):
     training_dataset, validation_dataset = fetch_dataset(
         dataset_name, transform, transform, include_val=True
     )
-    training_data_loader, validation_data_loader = create_data_loaders(
+    training_data_loader, validation_data_loader = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
         train_dataset=training_dataset,

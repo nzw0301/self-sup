@@ -13,13 +13,16 @@ from omegaconf import OmegaConf
 from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
 
-from src.check_hydra_conf import check_hydra_conf
-from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import create_data_loaders, get_train_val_test_datasets
-from src.distributed_utils import init_ddp
-from src.logger import get_logger
-from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
-from src.model import SupervisedModel
+from self_sup.check_hydra_conf import check_hydra_conf
+from self_sup.data.transforms import create_simclr_data_augmentation
+from self_sup.data.utils import (
+    create_data_loaders_from_datasets,
+    get_train_val_test_datasets,
+)
+from self_sup.distributed_utils import init_ddp
+from self_sup.logger import get_logger
+from self_sup.lr_utils import calculate_initial_lr, calculate_warmup_lr
+from self_sup.model import SupervisedModel
 
 
 def validation(
@@ -222,7 +225,7 @@ def main(cfg: OmegaConf):
         cfg["augmentation"]["strength"], size=cfg["augmentation"]["size"]
     )
 
-    training_data_loader, validation_data_loader = create_data_loaders(
+    training_data_loader, validation_data_loader = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batch_size"],
         train_dataset=training_dataset,
