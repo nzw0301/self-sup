@@ -1,39 +1,62 @@
 import numpy as np
-from omegaconf import OmegaConf
 
 
-def calculate_initial_lr(cfg: OmegaConf) -> float:
+def calculate_initial_lr(
+    base_lr: float, batch_size: int, lr_schedule: str = "linear"
+) -> float:
     """
     Proposed initial learning rates by SimCLR paper.
-
     Note: SimCLR paper says squared learning rate is better when the size of mini-batches is small.
-
-    :param cfg: Hydra's config.
     :return: Initial learning rate whose type is float.
     """
 
-    if cfg["optimizer"]["linear_schedule"]:
-        scaled_lr = cfg["optimizer"]["lr"] * cfg["experiment"]["batches"] / 256.0
+    assert base_lr > 0.0
+    assert batch_size >= 1
+    assert lr_schedule in {"linear", "square"}
+
+    if lr_schedule == "linear":
+        scaled_lr = base_lr * batch_size / 256.0
     else:
-        scaled_lr = cfg["optimizer"]["lr"] * np.sqrt(cfg["experiment"]["batches"])
+        scaled_lr = base_lr * np.sqrt(batch_size)
 
     return scaled_lr
 
 
-def calculate_warmup_lr(cfg: OmegaConf, warmup_steps: int, current_step: int) -> float:
+def calculate_lr_list(
+    lr: float, num_lr_updates_per_epoch: int, warmup_epochs: int, epochs: int
+) -> np.ndarray:
     """
-    Calculate a learning rate during warmup period given a current step.
-    :param cfg: Hydra's config file.
-    :param warmup_steps: The number of steps for warmup.
-    :param current_step: the current step.
-    :return: learning rate value.
+    scaling + linear warmup + cosine annealing without restart
+    https://github.com/facebookresearch/swav/blob/master/main_swav.py#L178-L182
+    Note that the first lr is 0.
+
+    :param lr: base learning rate. This lr might be calculated by `calculate_initial_lr` in self-supervised experiment.
+    :param num_lr_updates_per_epoch: the number of iterations per epoch.
+    :param warmup_epochs: the number of epochs for linear warmup.
+    :param epochs: the number of total epochs including warmup.
+
+    :return: np.ndarray of learning rates for all steps.
+
+    NOTE:
+        SimCLR and SWaV: num_lr_updates_per_epoch is the number of batches per epoch.
+        SimSiam: num_lr_updates_per_epoch is 1.
     """
 
-    initial_lr = calculate_initial_lr(cfg)
+    assert lr > 0.0
+    assert num_lr_updates_per_epoch > 0
+    assert warmup_epochs >= 0
+    assert epochs > 0
 
-    if warmup_steps > 0.0:
-        learning_rate = current_step / warmup_steps * initial_lr
-    else:
-        learning_rate = initial_lr
+    warmup_lr_schedule = np.linspace(0, lr, num_lr_updates_per_epoch * warmup_epochs)
+    num_non_warmup_epoch = epochs - warmup_epochs
+    num_non_warmup_lr_updates = num_lr_updates_per_epoch * num_non_warmup_epoch
+    iters = np.arange(num_lr_updates_per_epoch * (epochs - warmup_epochs))
 
-    return learning_rate
+    cosine_lr_schedule = np.array(
+        [
+            0.5 * lr * (1.0 + np.cos(np.pi * t / num_non_warmup_lr_updates))
+            for t in iters
+        ]
+    )
+
+    return np.concatenate((warmup_lr_schedule, cosine_lr_schedule))

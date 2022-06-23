@@ -1,6 +1,6 @@
 # @package _global_
 optimizer:
-    linear_schedule: true
+    lr_schedule: "linear"
     momentum: 0.9
     warmup_epochs: 10
     lr: 1.0 # learning rate

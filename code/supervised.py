@@ -4,12 +4,12 @@ from typing import Tuple
 import hydra
 import numpy as np
 import torch
-import torchvision
 import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
+from torch.cuda.amp import GradScaler
 
 from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.transforms import create_simclr_data_augmentation
@@ -19,8 +19,8 @@ from self_sup.data.utils import (
 )
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
-from self_sup.lr_utils import calculate_initial_lr, calculate_warmup_lr
 from self_sup.model import SupervisedModel
+from self_sup.lr_utils import calculate_lr_list, calculate_initial_lr
 
 
 def validation(
@@ -114,7 +114,14 @@ def main(cfg: OmegaConf):
             f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples}"
         )
         # TODO(nzw): init wandb
-        wandb.init()
+        wandb.init(
+            dir=hydra.utils.get_original_cwd(),
+            project="self-sup",
+            entity="nzw0301",
+            config=cfg,
+            tags=(cfg["dataset"]["name"], "supervised"),
+            group="seed-{}".format(seed),
+        )
 
     model = SupervisedModel(
         base_cnn=cfg["architecture"]["base_cnn"], num_classes=num_classes,
@@ -123,12 +130,24 @@ def main(cfg: OmegaConf):
     model = model.to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
-    # TODO(nzw): add mixed precision
+    epochs = cfg["experiment"]["epochs"]
+    init_lr = calculate_initial_lr(
+        base_lr=cfg["optimizer"]["lr"],
+        batch_size=cfg["experiment"]["batch_size"],
+        lr_schedule=cfg["lr_scheduler"]["name"],
+    )
+    # simsiam version.
+    lr_list = calculate_lr_list(
+        init_lr,
+        num_lr_updates_per_epoch=1,
+        warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
+        epochs=epochs,
+    )
 
     # optimizer
     optimizer = torch.optim.SGD(
         params=model.parameters(),
-        lr=calculate_initial_lr(cfg),
+        lr=init_lr,
         momentum=cfg["optimizer"]["momentum"],
         nesterov=False,
         weight_decay=cfg["optimizer"]["decay"],
@@ -136,9 +155,11 @@ def main(cfg: OmegaConf):
     # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
     # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
-    # TODO(nzw): fix this part by following SWaV's way ir simsiam way.
+    scaler = GradScaler()
+
+    # TODO(nzw): fix this part by following SWaV's way or simsiam way.
     # num_gpus = cfg["distributed"]["world_size"]
-    epochs = cfg["experiment"]["epochs"]
+
     best_metric = np.finfo(np.float64).max
 
     for epoch in range(epochs):
@@ -147,12 +168,18 @@ def main(cfg: OmegaConf):
         train_data_loader.sampler.set_epoch(epoch)
         sum_train_loss = torch.tensor([0.0], device=local_rank)
 
+        # update learning rate
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr_list[epoch]
+
         for data, targets in train_data_loader:
             optimizer.zero_grad()
             data, targets = data.to(local_rank), targets.to(local_rank)
-            loss = cross_entropy(model(data), targets)
-            loss.backward()
-            optimizer.step()
+            with torch.autocast():
+                loss = cross_entropy(model(data), targets)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             sum_train_loss += loss.item()
 
         torch.distributed.reduce(sum_train_loss, dst=0)
@@ -205,7 +232,7 @@ def main(cfg: OmegaConf):
 
             torch.distributed.barrier()
 
-    # evaluate on test dataset
+    # evaluate the best performed checkpoint on the test dataset
     torch.distributed.barrier()
     map_location = {"cuda:%d" % 0: "cuda:%d" % local_rank}
     model.load_state_dict(torch.load(save_fname, map_location=map_location))
