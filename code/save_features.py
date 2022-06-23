@@ -7,6 +7,7 @@ import torch
 import torchvision
 import yaml
 from omegaconf import OmegaConf
+
 from src.data.transforms import create_simclr_data_augmentation
 from src.data.utils import create_data_loaders, fetch_dataset
 from src.model import ContrastiveModel
@@ -75,7 +76,7 @@ def main(cfg: OmegaConf):
     training_data_loader, validation_data_loader = create_data_loaders(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset,
+        train_dataset=training_dataset,
         validation_dataset=validation_dataset,
         train_drop_last=False,
         distributed=False,
@@ -134,7 +135,7 @@ def main(cfg: OmegaConf):
     training_data_loader, validation_data_loader = create_data_loaders(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset,
+        train_dataset=training_dataset,
         validation_dataset=validation_dataset,
         train_drop_last=False,
         distributed=False,

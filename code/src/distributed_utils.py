@@ -3,17 +3,16 @@ import torch.distributed as dist
 from omegaconf import OmegaConf
 
 
-def init_ddp(conf: OmegaConf) -> None:
+def init_ddp(conf: OmegaConf, local_rank: int) -> None:
 
-    rank = conf["distributed"]["local_rank"]
     world_size = conf["distributed"]["world_size"]
     dist_url = conf["distributed"]["dist_url"]
 
-    # prepare distributed
+    # prepare DDP group.
     dist.init_process_group(
-        backend="nccl", init_method=dist_url, world_size=world_size, rank=rank,
+        backend="nccl", init_method=dist_url, world_size=world_size, rank=local_rank
     )
-    torch.cuda.set_device(rank)
+    torch.cuda.set_device(local_rank)
 
 
 def cleanup():

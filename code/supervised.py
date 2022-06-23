@@ -1,48 +1,49 @@
 import json
 import logging
 import os
+from typing import Tuple
 
 import hydra
 import numpy as np
 import torch
 import torchvision
+import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
+from torch.nn.functional import cross_entropy
+from torch.utils.data import DataLoader
+
 from src.check_hydra_conf import check_hydra_conf
 from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import create_data_loaders, fetch_dataset, get_num_classes
+from src.data.utils import create_data_loaders, get_train_val_test_datasets
 from src.distributed_utils import init_ddp
-from src.eval_utils import make_two_vector_for_confusion_matrix
+from src.logger import get_logger
 from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
 from src.model import SupervisedModel
-from torch.utils.data import DataLoader
-from typing import Tuple
 
 
 def validation(
     validation_data_loader: torch.utils.data.DataLoader,
     model: SupervisedModel,
-    local_rank: int,
+    device: torch.device,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param validation_data_loader: Validation data loader.
     :param model: ResNet based classifier.
-    :param local_rank: local rank.
+    :param device: Torch.device instance to store the data and metrics.
     :return: validation loss, the number of corrected samples, and the size of samples on a local
     """
 
     model.eval()
 
-    sum_loss = torch.tensor([0.0]).to(local_rank)
-    num_corrects = torch.tensor([0.0]).to(local_rank)
+    sum_loss = torch.tensor([0.0], device=device)
+    num_corrects = torch.tensor([0.0], device=device)
 
     with torch.no_grad():
         for data, targets in validation_data_loader:
-            data, targets = data.to(local_rank), targets.to(local_rank)
+            data, targets = data.to(device), targets.to(device)
             unnormalized_features = model(data)
-            loss = torch.nn.functional.cross_entropy(
-                unnormalized_features, targets, reduction="sum"
-            )
+            loss = cross_entropy(unnormalized_features, targets, reduction="sum")
 
             predicted = torch.max(unnormalized_features.data, 1)[1]
 
@@ -112,7 +113,7 @@ def learning(
 
             optimizer.zero_grad()
             data, targets = data.to(local_rank), targets.to(local_rank)
-            loss = torch.nn.functional.cross_entropy(model(data), targets)
+            loss = cross_entropy(model(data), targets)
             loss.backward()
             optimizer.step()
 
@@ -190,50 +191,45 @@ def learning(
             json.dump(supervised_results, f)
 
 
-@hydra.main(config_path="conf", config_name="supervised_config")
+@hydra.main(config_path="conf", config_name="supervised")
 def main(cfg: OmegaConf):
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.terminator = ""
-    logger.addHandler(stream_handler)
+    logger = get_logger()
 
     check_hydra_conf(cfg)
-    init_ddp(cfg)
 
-    # reproducibility
+    local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
+    init_ddp(cfg, local_rank)
+
+    # for reproducibility
     seed = cfg["experiment"]["seed"]
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    rnd = np.random.RandomState(seed)
 
-    rank = cfg["distributed"]["local_rank"]
-    logger.info("Using cuda:{}".format(rank))
+    logger.info("Using cuda:{}".format(local_rank))
 
     # initialise data loaders
-    dataset_name = cfg["dataset"]["name"]
-    num_classes = get_num_classes(cfg["dataset"]["name"])
-    is_cifar = "cifar" in cfg["dataset"]["name"]
-
-    training_transform = create_simclr_data_augmentation(
-        cfg["dataset"]["strength"], size=cfg["dataset"]["size"]
+    training_dataset, validation_dataset, test_dataset = get_train_val_test_datasets(
+        rnd=rnd,
+        root=cfg["dataset"]["root"],
+        validation_ratio=cfg["dataset"]["validation_ratio"],
+        dataset_name=cfg["dataset"]["normalize"],
+        normalize=cfg["dataset"]["name"],
     )
-    val_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),])
-
-    training_dataset, validation_dataset = fetch_dataset(
-        dataset_name, training_transform, val_transform
+    training_dataset.transform = create_simclr_data_augmentation(
+        cfg["augmentation"]["strength"], size=cfg["augmentation"]["size"]
     )
+
     training_data_loader, validation_data_loader = create_data_loaders(
         num_workers=cfg["experiment"]["num_workers"],
-        batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset,
+        batch_size=cfg["experiment"]["batch_size"],
+        train_dataset=training_dataset,
         validation_dataset=validation_dataset,
     )
 
-    if rank == 0:
+    if local_rank == 0:
         logger.info(
             "#train: {}, #val: {}".format(
                 len(training_dataset), len(validation_dataset)
@@ -241,13 +237,11 @@ def main(cfg: OmegaConf):
         )
 
     model = SupervisedModel(
-        base_cnn=cfg["architecture"]["base_cnn"],
-        num_classes=num_classes,
-        is_cifar=is_cifar,
+        base_cnn=cfg["architecture"]["base_cnn"], num_classes=num_classes,
     )
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = model.to(rank)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
+    model = model.to(local_rank)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     learning(cfg, training_data_loader, validation_data_loader, model)
 

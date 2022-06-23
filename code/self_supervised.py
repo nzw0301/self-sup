@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
+from torch.utils.data import DataLoader
+
 from src.check_hydra_conf import check_hydra_conf
 from src.data.transforms import SimCLRTransforms
 from src.data.utils import create_data_loaders, fetch_dataset
@@ -12,7 +14,6 @@ from src.distributed_utils import init_ddp
 from src.loss import NT_Xent
 from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
 from src.model import ContrastiveModel
-from torch.utils.data import DataLoader
 
 
 def exclude_from_wt_decay(
@@ -164,7 +165,7 @@ def main(cfg: OmegaConf):
     training_data_loader = create_data_loaders(
         num_workers=cfg["experiment"]["num_workers"],
         batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset,
+        train_dataset=training_dataset,
         validation_dataset=None,
     )[0]
 

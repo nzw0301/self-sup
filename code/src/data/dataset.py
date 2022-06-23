@@ -1,6 +1,4 @@
-import numpy as np
 import torch
-import torchvision
 
 
 class DownstreamDataset(torch.utils.data.Dataset):
