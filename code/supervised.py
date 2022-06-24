@@ -7,9 +7,9 @@ import torch
 import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
+from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler
 
 from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.transforms import create_simclr_data_augmentation
@@ -19,8 +19,8 @@ from self_sup.data.utils import (
 )
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
+from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 from self_sup.model import SupervisedModel
-from self_sup.lr_utils import calculate_lr_list, calculate_initial_lr
 
 
 def validation(
@@ -29,9 +29,9 @@ def validation(
     """
     :param data_loader: Data loader for a validation or test dataset.
     :param model: ResNet based classifier.
-    :param device: `torch.device` instance to store the data and metrics.
+    :param device: A `torch.device` instance to store the data and metrics.
 
-    :return: validation loss and the number of corrected samples.
+    :return: Categorical cross-entropy loss and the number of correctly predicted samples.
     """
 
     model.eval()
@@ -39,15 +39,15 @@ def validation(
     sum_loss = torch.tensor([0.0], device=device)
     num_corrects = torch.tensor([0.0], device=device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for data, targets in data_loader:
             data, targets = data.to(device), targets.to(device)
-            unnormalized_features = model(data)
-            loss = cross_entropy(unnormalized_features, targets, reduction="sum")
+            logits = model(data)  # mini-batch-size x #classes
+            loss = cross_entropy(logits, targets, reduction="sum")  # mini-batch-size
 
-            predicted = torch.max(unnormalized_features.data, 1)[1]
+            predicted = torch.max(logits.data, dim=1)[1]  # mini-batch-size
 
-            sum_loss += loss.item()
+            sum_loss += loss
             num_corrects += (predicted == targets).sum()
 
     return sum_loss, num_corrects
@@ -72,7 +72,7 @@ def main(cfg: OmegaConf):
 
     logger.info("Using cuda:{}".format(local_rank))
 
-    # initialise data loaders
+    # initialise data loaders.
     train_dataset, validation_dataset, test_dataset = get_train_val_test_datasets(
         rnd=rnd,
         root=cfg["dataset"]["root"],
@@ -113,7 +113,6 @@ def main(cfg: OmegaConf):
         logger.info(
             f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples}"
         )
-        # TODO(nzw): init wandb
         wandb.init(
             dir=hydra.utils.get_original_cwd(),
             project="self-sup",
@@ -131,7 +130,7 @@ def main(cfg: OmegaConf):
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     epochs = cfg["experiment"]["epochs"]
-    init_lr = calculate_initial_lr(
+    init_lr = calculate_scaled_lr(
         base_lr=cfg["optimizer"]["lr"],
         batch_size=cfg["experiment"]["batch_size"],
         lr_schedule=cfg["lr_scheduler"]["name"],

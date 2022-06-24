@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def calculate_initial_lr(
+def calculate_scaled_lr(
     base_lr: float, batch_size: int, lr_schedule: str = "linear"
 ) -> float:
     """
@@ -30,7 +30,7 @@ def calculate_lr_list(
     https://github.com/facebookresearch/swav/blob/master/main_swav.py#L178-L182
     Note that the first lr is 0.
 
-    :param lr: base learning rate. This lr might be calculated by `calculate_initial_lr` in self-supervised experiment.
+    :param lr: base learning rate. This lr might be calculated by `calculate_scaled_lr` in self-supervised experiments.
     :param num_lr_updates_per_epoch: the number of iterations per epoch.
     :param warmup_epochs: the number of epochs for linear warmup.
     :param epochs: the number of total epochs including warmup.
