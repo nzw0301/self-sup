@@ -55,12 +55,12 @@ def validation(
 
     return sum_loss, num_corrects
 
-
-@hydra.main(version_base=None, config_path="conf", config_name="supervised")
+# TODO (nzw0301):Version_base=None changes working dir somehow, so remove it as a hotfix...
+@hydra.main(config_path="conf", config_name="supervised")
 def main(cfg: OmegaConf):
     logger = get_logger()
-
     # check_hydra_conf(cfg)
+
     local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
     init_ddp(cfg, local_rank)
 
@@ -137,7 +137,7 @@ def main(cfg: OmegaConf):
     # simsiam version.
     lr_list = calculate_lr_list(
         init_lr,
-        num_lr_updates_per_epoch=cfg["lr_scheduler"]["num_lr_updates_per_epoch"],
+        num_lr_updates_per_epoch=1,
         warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
         epochs=epochs,
     )

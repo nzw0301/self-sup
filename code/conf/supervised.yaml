@@ -10,3 +10,4 @@ defaults:
     - override hydra/output: supervised
 
 name: supervised
+hydra/job/chdir: true

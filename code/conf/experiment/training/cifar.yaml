@@ -1,9 +1,9 @@
 # @package _global_
 experiment:
     num_workers: 3
-    train_batch_size: 256
-    eval_batch_size: 512
-    epochs: 100
+    train_batch_size: 128
+    eval_batch_size: 1024
+    epochs: 200
     metric: acc # acc or loss
     seed: 7 # random seed value
     output_model_name: supervised.pt
