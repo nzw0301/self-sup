@@ -1,5 +1,7 @@
 import os
+from pathlib import Path
 from typing import Tuple
+
 
 import hydra
 import numpy as np
@@ -54,14 +56,14 @@ def validation(
     return sum_loss, num_corrects
 
 
-@hydra.main(config_path="conf", config_name="supervised")
+@hydra.main(version_base=None, config_path="conf", config_name="supervised")
 def main(cfg: OmegaConf):
     logger = get_logger()
 
-    check_hydra_conf(cfg)
-
+    # check_hydra_conf(cfg)
     local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
     init_ddp(cfg, local_rank)
+
 
     # for reproducibility
     seed = cfg["experiment"]["seed"]
@@ -109,7 +111,7 @@ def main(cfg: OmegaConf):
 
     if local_rank == 0:
         logger.info(
-            f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples}"
+            f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples} train batch? {num_train_samples_per_epoch}"
         )
         wandb.init(
             dir=hydra.utils.get_original_cwd(),
@@ -155,6 +157,7 @@ def main(cfg: OmegaConf):
     scaler = GradScaler()
 
     best_metric = np.finfo(np.float64).max
+    save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
 
     for epoch in range(epochs):
         # one training loop
@@ -169,12 +172,12 @@ def main(cfg: OmegaConf):
         for data, targets in train_data_loader:
             optimizer.zero_grad()
             data, targets = data.to(local_rank), targets.to(local_rank)
-            with torch.autocast():
+            with torch.autocast("cuda"):
                 loss = cross_entropy(model(data), targets)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            sum_train_loss += loss.item()
+            sum_train_loss += loss.item() * train_batch_size
 
         torch.distributed.reduce(sum_train_loss, dst=0)
 
@@ -193,12 +196,12 @@ def main(cfg: OmegaConf):
             lr_for_logging = optimizer.param_groups[0]["lr"]
             train_loss = sum_train_loss.item() / num_train_samples_per_epoch
             val_loss = sum_val_loss.item() / num_val_samples
-            val_acc = num_val_corrects.item() / num_val_samples
+            val_acc = num_val_corrects.item() / num_val_samples * 100.
 
             log_message = (
                 f"Epoch:{epoch}/{epochs} progress:{progress:.3f} "
-                f"train loss:{train_loss:.3f}, lr:{lr_for_logging:.7f}"
-                f"val loss:{val_loss:.3f}, test loss:{val_acc:.3f}"
+                f"train loss:{train_loss:.3f}, lr:{lr_for_logging:.7f} "
+                f"val loss:{val_loss:.3f}, val acc:{val_acc:.3f}"
             )
             logger.info(log_message)
 
@@ -213,18 +216,17 @@ def main(cfg: OmegaConf):
             )
 
             # save checkpoint if metric improves.
-            if cfg["parameter"]["metric"] == "loss":
+            if cfg["experiment"]["metric"] == "loss":
                 metric = val_loss
             else:
                 # store metric as risk: 1 - accuracy
                 metric = 1.0 - val_acc
 
             if metric <= best_metric:
-                save_fname = cfg["experiment"]["output_model_name"]
                 torch.save(model.state_dict(), save_fname)
                 best_metric = metric
 
-            torch.distributed.barrier()
+        torch.distributed.barrier()
 
     # evaluate the best performed checkpoint on the test dataset
     torch.distributed.barrier()
@@ -242,6 +244,11 @@ def main(cfg: OmegaConf):
         wandb.run.summary["supervised_test_loss"] = test_loss
         wandb.run.summary["supervised_test_acc"] = test_acc
         wandb.save(str(save_fname))
+
+        log_message = (
+            f"test loss:{test_loss:.3f}, test acc:{test_acc:.3f}"
+        )
+        logger.info(log_message)
 
     torch.distributed.barrier()
 

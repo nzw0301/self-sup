@@ -1,10 +1,12 @@
-# @package _group_
 defaults:
+    - _self_
     - architecture: resnet18
     - dataset: cifar100
+    - augmentation: cifar
     - experiment: training/cifar
     - optimizer: supervised
     - distributed: base
-    - hydra/output: supervised
+    - lr_scheduler: simsiam
+    - override hydra/output: supervised
 
 name: supervised

@@ -6,3 +6,4 @@ experiment:
     epochs: 100
     metric: acc # acc or loss
     seed: 7 # random seed value
+    output_model_name: supervised.pt

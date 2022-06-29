@@ -1,4 +1,3 @@
-import cv2
 import numpy as np
 from torchvision import transforms
 from omegaconf import OmegaConf
@@ -9,6 +8,8 @@ class RandomGaussianBlur(object):
     """
 
     def __call__(self, img):
+        import cv2
+
         if np.random.rand() > 0.5:
             return img
         sigma = np.random.uniform(0.1, 2.0)
