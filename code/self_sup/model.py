@@ -181,9 +181,7 @@ class ContrastiveModel(torch.nn.Module):
 
 
 class SupervisedModel(torch.nn.Module):
-    def __init__(
-        self, base_cnn: str = "resnet18", num_classes: int = 10
-    ):
+    def __init__(self, base_cnn: str = "resnet18", num_classes: int = 10):
         """Instantiate ResNet-{18,34,50} as a supervised classifier.
 
         Args:
@@ -205,7 +203,6 @@ class SupervisedModel(torch.nn.Module):
             self.f = resnet18()
             num_last_hidden_units = 512
 
-
         self.f.fc = torch.nn.Linear(num_last_hidden_units, num_classes)
 
     def forward(self, inputs: torch.FloatTensor) -> torch.FloatTensor:
@@ -225,12 +222,7 @@ def modify_resnet_by_simclr_for_cifar(model: SupervisedModel) -> SupervisedModel
 
     # replace the first conv2d with smaller conv
     model.f.conv1 = torch.nn.Conv2d(
-        in_channels=3,
-        out_channels=64,
-        stride=1,
-        kernel_size=3,
-        padding=3,
-        bias=False,
+        in_channels=3, out_channels=64, stride=1, kernel_size=3, padding=3, bias=False,
     )
 
     # remove the first max pool

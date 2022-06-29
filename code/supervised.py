@@ -42,7 +42,9 @@ def validation(
         for data, targets in data_loader:
             data, targets = data.to(device), targets.to(device)
             logits = model(data)  # (mini-batch-size, #classes)
-            loss = cross_entropy(logits, targets, reduction="sum")  # (mini-batch-size, )
+            loss = cross_entropy(
+                logits, targets, reduction="sum"
+            )  # (mini-batch-size, )
 
             predicted = torch.max(logits.data, dim=1)[1]  # (mini-batch-size, )
 
@@ -83,15 +85,16 @@ def main(cfg: OmegaConf):
         cfg["augmentation"]["strength"], size=cfg["augmentation"]["size"]
     )
 
+    train_batch_size = cfg["experiment"]["train_batch_size"]
     (
         train_data_loader,
         validation_data_loader,
         test_data_loader,
     ) = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
-        train_batch_size=cfg["experiment"]["batch_size"],
-        validation_batch_size=cfg["experiment"]["batch_size"],
-        test_batch_size=cfg["experiment"]["batch_size"],
+        train_batch_size=train_batch_size,
+        validation_batch_size=cfg["experiment"]["eval_batch_size"],
+        test_batch_size=cfg["experiment"]["eval_batch_size"],
         ddp_sampler_seed=seed,
         train_dataset=train_dataset,
         validation_dataset=validation_dataset,
@@ -101,9 +104,7 @@ def main(cfg: OmegaConf):
 
     num_classes = len(np.unique(test_dataset.targets))
     num_train_samples_per_epoch = (
-        cfg["experiment"]["batch_size"]
-        * len(train_data_loader)
-        * cfg["distributed"]["world_size"]
+        train_batch_size * len(train_data_loader) * cfg["distributed"]["world_size"]
     )
     num_val_samples = len(validation_dataset)
     num_test_samples = len(test_dataset)
@@ -121,7 +122,9 @@ def main(cfg: OmegaConf):
             group="seed-{}".format(seed),
         )
 
-    model = SupervisedModel(base_cnn=cfg["architecture"]["name"], num_classes=num_classes)
+    model = SupervisedModel(
+        base_cnn=cfg["architecture"]["name"], num_classes=num_classes
+    )
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = model.to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
@@ -129,13 +132,13 @@ def main(cfg: OmegaConf):
     epochs = cfg["experiment"]["epochs"]
     init_lr = calculate_scaled_lr(
         base_lr=cfg["optimizer"]["lr"],
-        batch_size=cfg["experiment"]["batch_size"],
+        batch_size=train_batch_size,
         lr_schedule=cfg["lr_scheduler"]["name"],
     )
     # simsiam version.
     lr_list = calculate_lr_list(
         init_lr,
-        num_lr_updates_per_epoch=1,
+        num_lr_updates_per_epoch=cfg["lr_scheduler"]["num_lr_updates_per_epoch"],
         warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
         epochs=epochs,
     )

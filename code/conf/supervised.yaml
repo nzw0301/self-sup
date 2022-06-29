@@ -6,3 +6,5 @@ defaults:
     - optimizer: supervised
     - distributed: base
     - hydra/output: supervised
+
+name: supervised

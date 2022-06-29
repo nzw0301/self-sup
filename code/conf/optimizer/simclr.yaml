@@ -1,7 +1,5 @@
 # @package _global_
 optimizer:
-    lr_schedule: "linear"
     momentum: 0.9
-    warmup_epochs: 10
     lr: 1.0 # learning rate
     decay: 1e-4 # weight decay
