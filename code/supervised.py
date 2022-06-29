@@ -11,7 +11,7 @@ from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
 
 from self_sup.check_hydra_conf import check_hydra_conf
-from self_sup.data.transforms import create_simclr_data_augmentation
+from self_sup.data.transforms import get_data_augmentation
 from self_sup.data.utils import (
     create_data_loaders_from_datasets,
     get_train_val_test_datasets,
@@ -81,9 +81,7 @@ def main(cfg: OmegaConf):
         dataset_name=cfg["dataset"]["name"],
         normalize=cfg["dataset"]["normalize"],
     )
-    train_dataset.transform = create_simclr_data_augmentation(
-        cfg["augmentation"]["strength"], size=cfg["augmentation"]["size"]
-    )
+    train_dataset.transform = get_data_augmentation(cfg["augmentation"])
 
     train_batch_size = cfg["experiment"]["train_batch_size"]
     (
@@ -155,9 +153,6 @@ def main(cfg: OmegaConf):
     # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
     scaler = GradScaler()
-
-    # TODO(nzw): fix this part by following SWaV's way or simsiam way.
-    # num_gpus = cfg["distributed"]["world_size"]
 
     best_metric = np.finfo(np.float64).max
 
