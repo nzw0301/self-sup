@@ -1,7 +1,6 @@
 # @package _global_
 dataset:
     name: cifar100
-    strength: 0.5 # data augmentation parameter
-    size: 32 # size to crop
-    # for self-supervised
-    num_views: 2 # the number of views per sample. SimCLR is for 2.
+    normalize: false
+    root: "~/pytorch_datasets"
+    validation_ratio: 0.1

@@ -1,0 +1,5 @@
+# @package _global_
+augmentation:
+    name: simclr_data_aug
+    size: 32 # size to crop
+    strength: 0.5 # data augmentation parameter

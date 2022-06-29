@@ -5,7 +5,6 @@ import hydra
 import numpy as np
 import torch
 import wandb
-from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy
@@ -42,10 +41,10 @@ def validation(
     with torch.inference_mode():
         for data, targets in data_loader:
             data, targets = data.to(device), targets.to(device)
-            logits = model(data)  # mini-batch-size x #classes
-            loss = cross_entropy(logits, targets, reduction="sum")  # mini-batch-size
+            logits = model(data)  # (mini-batch-size, #classes)
+            loss = cross_entropy(logits, targets, reduction="sum")  # (mini-batch-size, )
 
-            predicted = torch.max(logits.data, dim=1)[1]  # mini-batch-size
+            predicted = torch.max(logits.data, dim=1)[1]  # (mini-batch-size, )
 
             sum_loss += loss
             num_corrects += (predicted == targets).sum()
@@ -122,9 +121,7 @@ def main(cfg: OmegaConf):
             group="seed-{}".format(seed),
         )
 
-    model = SupervisedModel(
-        base_cnn=cfg["architecture"]["base_cnn"], num_classes=num_classes,
-    )
+    model = SupervisedModel(base_cnn=cfg["architecture"]["name"], num_classes=num_classes)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = model.to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
