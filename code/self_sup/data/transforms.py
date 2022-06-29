@@ -2,6 +2,7 @@ import numpy as np
 from torchvision import transforms
 from omegaconf import OmegaConf
 
+
 class RandomGaussianBlur(object):
     """
     https://github.com/facebookresearch/swav/blob/master/src/multicropdataset.py
@@ -75,6 +76,4 @@ def get_data_augmentation(cfg: OmegaConf):
     assert cfg["name"] in {"simclr_data_aug"}
 
     if cfg["name"] == "simclr_data_aug":
-        return create_simclr_data_augmentation(
-            cfg["strength"], size=cfg["size"]
-        )
+        return create_simclr_data_augmentation(cfg["strength"], size=cfg["size"])

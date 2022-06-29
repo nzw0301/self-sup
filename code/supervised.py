@@ -12,7 +12,7 @@ from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
 
-from self_sup.check_hydra_conf import check_hydra_conf
+from self_sup.wandb_utils import flatten_omegaconf
 from self_sup.data.transforms import get_data_augmentation
 from self_sup.data.utils import (
     create_data_loaders_from_datasets,
@@ -64,7 +64,6 @@ def main(cfg: OmegaConf):
     local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
     init_ddp(cfg, local_rank)
 
-
     # for reproducibility
     seed = cfg["experiment"]["seed"]
     torch.manual_seed(seed)
@@ -111,13 +110,13 @@ def main(cfg: OmegaConf):
 
     if local_rank == 0:
         logger.info(
-            f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples} train batch? {num_train_samples_per_epoch}"
+            f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples}"
         )
         wandb.init(
             dir=hydra.utils.get_original_cwd(),
             project="self-sup",
             entity="nzw0301",
-            config=cfg,
+            config=flatten_omegaconf(cfg),
             tags=(cfg["dataset"]["name"], "supervised"),
             group="seed-{}".format(seed),
         )
@@ -151,8 +150,6 @@ def main(cfg: OmegaConf):
         nesterov=False,
         weight_decay=cfg["optimizer"]["decay"],
     )
-    # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
-    # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
     scaler = GradScaler()
 
@@ -196,7 +193,7 @@ def main(cfg: OmegaConf):
             lr_for_logging = optimizer.param_groups[0]["lr"]
             train_loss = sum_train_loss.item() / num_train_samples_per_epoch
             val_loss = sum_val_loss.item() / num_val_samples
-            val_acc = num_val_corrects.item() / num_val_samples * 100.
+            val_acc = num_val_corrects.item() / num_val_samples * 100.0
 
             log_message = (
                 f"Epoch:{epoch}/{epochs} progress:{progress:.3f} "
@@ -245,9 +242,7 @@ def main(cfg: OmegaConf):
         wandb.run.summary["supervised_test_acc"] = test_acc
         wandb.save(str(save_fname))
 
-        log_message = (
-            f"test loss:{test_loss:.3f}, test acc:{test_acc:.3f}"
-        )
+        log_message = f"test loss:{test_loss:.3f}, test acc:{test_acc:.3f}"
         logger.info(log_message)
 
     torch.distributed.barrier()
@@ -256,6 +251,6 @@ def main(cfg: OmegaConf):
 if __name__ == "__main__":
     """
     To run this code,
-    `python launch.py --nproc_per_node={The number of GPUs on a single machine} supervised.py`
+    `torchrun --nproc_per_node={The number of GPUs on a single machine} supervised.py`
     """
     main()
