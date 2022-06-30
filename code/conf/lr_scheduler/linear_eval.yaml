@@ -1,0 +1,5 @@
+# @package _global_
+lr_scheduler:
+    name: "linear"
+    warmup_epochs: 10
+    num_lr_updates_per_epoch: 1

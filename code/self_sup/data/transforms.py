@@ -1,6 +1,6 @@
-import cv2
 import numpy as np
 from torchvision import transforms
+from omegaconf import OmegaConf
 
 
 class RandomGaussianBlur(object):
@@ -9,6 +9,8 @@ class RandomGaussianBlur(object):
     """
 
     def __call__(self, img):
+        import cv2
+
         if np.random.rand() > 0.5:
             return img
         sigma = np.random.uniform(0.1, 2.0)
@@ -68,3 +70,10 @@ class SimCLRTransforms(object):
 
     def __call__(self, x) -> list:
         return [self.transform(x) for _ in range(self.num_views)]
+
+
+def get_data_augmentation(cfg: OmegaConf):
+    assert cfg["name"] in {"simclr_data_aug"}
+
+    if cfg["name"] == "simclr_data_aug":
+        return create_simclr_data_augmentation(cfg["strength"], size=cfg["size"])

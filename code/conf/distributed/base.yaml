@@ -1,5 +1,4 @@
 # @package _global_
 distributed:
     dist_url: "env://"
-    local_rank: 0
-    world_size: 4
+    world_size: 8

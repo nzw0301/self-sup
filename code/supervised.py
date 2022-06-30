@@ -1,260 +1,269 @@
-import json
-import logging
 import os
+from pathlib import Path
+from typing import Tuple
+
 
 import hydra
 import numpy as np
 import torch
-import torchvision
+import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
-from src.check_hydra_conf import check_hydra_conf
-from src.data.transforms import create_simclr_data_augmentation
-from src.data.utils import create_data_loaders, fetch_dataset, get_num_classes
-from src.distributed_utils import init_ddp
-from src.eval_utils import make_two_vector_for_confusion_matrix
-from src.lr_utils import calculate_initial_lr, calculate_warmup_lr
-from src.model import SupervisedModel
+from torch.cuda.amp import GradScaler
+from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
-from typing import Tuple
+
+
+from self_sup.wandb_utils import flatten_omegaconf
+from self_sup.data.transforms import get_data_augmentation
+from self_sup.data.utils import (
+    create_data_loaders_from_datasets,
+    get_train_val_test_datasets,
+)
+from self_sup.distributed_utils import init_ddp
+from self_sup.logger import get_logger
+from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
+from self_sup.model import SupervisedModel, modify_resnet_by_simclr_for_cifar
 
 
 def validation(
-    validation_data_loader: torch.utils.data.DataLoader,
-    model: SupervisedModel,
-    local_rank: int,
+    data_loader: DataLoader, model: SupervisedModel, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    :param validation_data_loader: Validation data loader.
+    :param data_loader: Data loader for a validation or test dataset.
     :param model: ResNet based classifier.
-    :param local_rank: local rank.
-    :return: validation loss, the number of corrected samples, and the size of samples on a local
+    :param device: A `torch.device` instance to store the data and metrics.
+
+    :return: Categorical cross-entropy loss and the number of correctly predicted samples.
     """
 
     model.eval()
 
-    sum_loss = torch.tensor([0.0]).to(local_rank)
-    num_corrects = torch.tensor([0.0]).to(local_rank)
+    sum_loss = torch.tensor([0.0], device=device)
+    num_corrects = torch.tensor([0.0], device=device)
 
-    with torch.no_grad():
-        for data, targets in validation_data_loader:
-            data, targets = data.to(local_rank), targets.to(local_rank)
-            unnormalized_features = model(data)
-            loss = torch.nn.functional.cross_entropy(
-                unnormalized_features, targets, reduction="sum"
-            )
+    with torch.inference_mode():
+        for data, targets in data_loader:
+            data, targets = data.to(device), targets.to(device)
+            logits = model(data)  # (mini-batch-size, #classes)
+            loss = cross_entropy(
+                logits, targets, reduction="sum"
+            )  # (mini-batch-size, )
 
-            predicted = torch.max(unnormalized_features.data, 1)[1]
+            predicted = torch.max(logits.data, dim=1)[1]  # (mini-batch-size, )
 
-            sum_loss += loss.item()
+            sum_loss += loss
             num_corrects += (predicted == targets).sum()
 
     return sum_loss, num_corrects
 
 
-def learning(
-    cfg: OmegaConf,
-    training_data_loader: torch.utils.data.DataLoader,
-    validation_data_loader: torch.utils.data.DataLoader,
-    model: SupervisedModel,
-) -> None:
-    """
-    Learning function including evaluation.
+# TODO (nzw0301):Version_base=None changes working dir somehow, so remove it as a hotfix...
+@hydra.main(config_path="conf", config_name="supervised")
+def main(cfg: OmegaConf):
+    logger = get_logger()
+    # check_hydra_conf(cfg)
 
-    :param cfg: Hydra's config instance.
-    :param training_data_loader: Training data loader.
-    :param validation_data_loader: Validation data loader.
-    :param model: `SupervisedModel`'s instance.
+    local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
+    init_ddp(cfg, local_rank)
 
-    :return: None
-    """
+    # for reproducibility
+    seed = cfg["experiment"]["seed"]
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    rnd = np.random.RandomState(seed)
 
-    local_rank = cfg["distributed"]["local_rank"]
-    num_gpus = cfg["distributed"]["world_size"]
-    epochs = cfg["experiment"]["epochs"]
-    num_training_samples = len(training_data_loader.dataset)
+    logger.info("Using cuda:{}".format(local_rank))
+
+    # initialise data loaders.
+    train_dataset, validation_dataset, test_dataset = get_train_val_test_datasets(
+        rnd=rnd,
+        root=cfg["dataset"]["root"],
+        validation_ratio=cfg["dataset"]["validation_ratio"],
+        dataset_name=cfg["dataset"]["name"],
+        normalize=cfg["dataset"]["normalize"],
+    )
+    train_dataset.transform = get_data_augmentation(cfg["augmentation"])
+
+    train_batch_size = cfg["experiment"]["train_batch_size"]
+    (
+        train_data_loader,
+        validation_data_loader,
+        test_data_loader,
+    ) = create_data_loaders_from_datasets(
+        num_workers=cfg["experiment"]["num_workers"],
+        train_batch_size=train_batch_size,
+        validation_batch_size=cfg["experiment"]["eval_batch_size"],
+        test_batch_size=cfg["experiment"]["eval_batch_size"],
+        ddp_sampler_seed=seed,
+        train_dataset=train_dataset,
+        validation_dataset=validation_dataset,
+        test_dataset=test_dataset,
+        distributed=True,
+    )
+
+    num_classes = len(np.unique(test_dataset.targets))
+    num_train_samples_per_epoch = (
+        train_batch_size * len(train_data_loader) * cfg["distributed"]["world_size"]
+    )
+    num_test_samples = len(test_dataset)
+
+    if validation_dataset is None:
+        validation_data_loader = test_data_loader
+        num_val_samples = num_test_samples
+        logger.info(f"NOTE: Use test dataset as validation dataset.")
+
     num_val_samples = len(validation_data_loader.dataset)
-    steps_per_epoch = len(training_data_loader)  # because the drop=True
-    total_steps = epochs * steps_per_epoch
-    warmup_steps = cfg["optimizer"]["warmup_epochs"] * steps_per_epoch
-    current_step = 0
 
-    validation_losses = []
-    validation_accuracies = []
-    best_metric = np.finfo(np.float64).max
+    if local_rank == 0:
+        logger.info(
+            f"#train: {len(train_dataset)}, #val: {num_val_samples}, #test: {num_test_samples}"
+        )
+        wandb.init(
+            dir=hydra.utils.get_original_cwd(),
+            project="self-sup",
+            entity="nzw0301",
+            config=flatten_omegaconf(cfg),
+            tags=(cfg["dataset"]["name"], "supervised"),
+            group="seed-{}".format(seed),
+        )
 
+    model = SupervisedModel(
+        base_cnn=cfg["architecture"]["name"], num_classes=num_classes
+    )
+    # Without this modificaiton for resnet-18 on CIFAR-10, the final accuracy drops about 5%.
+    # TODO: varify larger networks too.
+    if "cifar" in cfg["dataset"]["name"]:
+        model = modify_resnet_by_simclr_for_cifar(model)
+    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    model = model.to(local_rank)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+
+    epochs = cfg["experiment"]["epochs"]
+    init_lr = calculate_scaled_lr(
+        base_lr=cfg["optimizer"]["lr"],
+        batch_size=train_batch_size,
+        lr_schedule=cfg["lr_scheduler"]["name"],
+    )
+    # simsiam version.
+    lr_list = calculate_lr_list(
+        init_lr,
+        num_lr_updates_per_epoch=1,
+        warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
+        epochs=epochs,
+    )
+
+    # optimizer
     optimizer = torch.optim.SGD(
         params=model.parameters(),
-        lr=calculate_initial_lr(cfg),
+        lr=init_lr,
         momentum=cfg["optimizer"]["momentum"],
         nesterov=False,
         weight_decay=cfg["optimizer"]["decay"],
     )
+    # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
-    # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
-    optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
+    scaler = GradScaler()
 
-    # TODO(nzw): fix this part by following SWaV's way.
-    cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer.optim, T_max=total_steps - warmup_steps,
-    )
+    best_metric = np.finfo(np.float64).max
+    save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(epochs):
+        # one training loop
         model.train()
-        training_data_loader.sampler.set_epoch(epoch)
+        train_data_loader.sampler.set_epoch(epoch)
+        sum_train_loss = torch.tensor([0.0], device=local_rank)
 
-        for data, targets in training_data_loader:
-            # adjust learning rate by applying linear warming.
-            if current_step <= warmup_steps:
-                lr = calculate_warmup_lr(cfg, warmup_steps, current_step)
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = lr
+        # update learning rate
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr_list[epoch]
 
+        for data, targets in train_data_loader:
             optimizer.zero_grad()
             data, targets = data.to(local_rank), targets.to(local_rank)
-            loss = torch.nn.functional.cross_entropy(model(data), targets)
-            loss.backward()
-            optimizer.step()
+            with torch.autocast("cuda"):
+                loss = cross_entropy(model(data), targets)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            sum_train_loss += loss.item() * train_batch_size
 
-            # adjust learning rate by applying cosine annealing.
-            if current_step > warmup_steps:
-                cos_lr_scheduler.step()
+        torch.distributed.reduce(sum_train_loss, dst=0)
 
-            current_step += 1
-
-        if local_rank == 0:
-            progress = epoch / epochs
-            lr_for_logging = optimizer.param_groups[0]["lr"]
-
-            logger_line = "Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
-                epoch, epochs, progress, loss.item(), lr_for_logging,
-            )
-
+        # validation
         sum_val_loss, num_val_corrects = validation(
             validation_data_loader, model, local_rank
         )
 
-        torch.distributed.barrier()
         torch.distributed.reduce(sum_val_loss, dst=0)
         torch.distributed.reduce(num_val_corrects, dst=0)
 
-        # logging and save checkpoint
+        # logging, send values to wandb, and save checkpoint,
         if local_rank == 0:
-            validation_loss = sum_val_loss.item() / num_val_samples
-            validation_acc = num_val_corrects.item() / num_val_samples
-            validation_losses.append(validation_loss)
-            validation_accuracies.append(validation_acc)
+            # logging
+            progress = (epoch + 1) / (epochs + 1)
+            lr_for_logging = optimizer.param_groups[0]["lr"]
+            train_loss = sum_train_loss.item() / num_train_samples_per_epoch
+            val_loss = sum_val_loss.item() / num_val_samples
+            val_acc = num_val_corrects.item() / num_val_samples * 100.0
 
-            if cfg["parameter"]["metric"] == "loss":
-                metric = validation_loss
+            log_message = (
+                f"Epoch:{epoch}/{epochs} progress:{progress:.3f} "
+                f"train loss:{train_loss:.3f}, lr:{lr_for_logging:.7f} "
+                f"val loss:{val_loss:.3f}, val acc:{val_acc:.3f}"
+            )
+            logger.info(log_message)
+
+            # send metrics to wandb
+            wandb.log(
+                data={
+                    "supervised_train_loss": train_loss,
+                    "supervised_val_loss": val_loss,
+                    "supervised_val_acc": val_acc,
+                },
+                step=epoch,
+            )
+
+            # save checkpoint if metric improves.
+            if cfg["experiment"]["metric"] == "loss":
+                metric = val_loss
             else:
                 # store metric as risk: 1 - accuracy
-                metric = 1.0 - validation_acc
+                metric = 1.0 - val_acc
 
             if metric <= best_metric:
-                # delete old checkpoint file
-                if "save_fname" in locals():
-                    if os.path.exists(save_fname):
-                        os.remove(save_fname)
-
-                save_fname = cfg["experiment"]["output_model_name"]
                 torch.save(model.state_dict(), save_fname)
                 best_metric = metric
 
-            logging.info(
-                logger_line
-                + " val loss:{:.3f}, val acc:{:.2f}%".format(
-                    validation_loss, validation_acc * 100.0
-                )
-            )
+        torch.distributed.barrier()
+
+    # evaluate the best performed checkpoint on the test dataset
+    torch.distributed.barrier()
+    map_location = {"cuda:%d" % 0: "cuda:%d" % local_rank}
+    model.load_state_dict(torch.load(save_fname, map_location=map_location))
+    test_loss, test_num_corrects = validation(test_data_loader, model, local_rank)
+
+    torch.distributed.reduce(test_loss, dst=0)
+    torch.distributed.reduce(test_num_corrects, dst=0)
 
     if local_rank == 0:
-        if cfg["parameter"]["metric"] == "loss":
-            logging_line = f"best val loss:{best_metric:.7f}%"
-        else:
-            logging_line = f"best val acc:{(1.0 - best_metric) * 100:.2f}%"
+        test_loss = test_loss.item() / num_test_samples
+        test_acc = test_num_corrects.item() / num_test_samples * 100.0
 
-        logging.info(logging_line)
+        wandb.run.summary["supervised_test_loss"] = test_loss
+        wandb.run.summary["supervised_test_acc"] = test_acc
 
-        # save validation metrics and both of best metrics
-        supervised_results = {
-            "validation": {
-                "losses": validation_losses,
-                "accuracies": validation_accuracies,
-                "lowest_loss": min(validation_losses),
-                "highest_accuracy": max(validation_accuracies),
-            }
-        }
-        fname = cfg["parameter"]["classification_results_json_fname"]
-        with open(fname, "w") as f:
-            json.dump(supervised_results, f)
+        log_message = f"test loss:{test_loss:.3f}, test acc:{test_acc:.3f}"
+        logger.info(log_message)
 
-
-@hydra.main(config_path="conf", config_name="supervised_config")
-def main(cfg: OmegaConf):
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.terminator = ""
-    logger.addHandler(stream_handler)
-
-    check_hydra_conf(cfg)
-    init_ddp(cfg)
-
-    # reproducibility
-    seed = cfg["experiment"]["seed"]
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-    rank = cfg["distributed"]["local_rank"]
-    logger.info("Using cuda:{}".format(rank))
-
-    # initialise data loaders
-    dataset_name = cfg["dataset"]["name"]
-    num_classes = get_num_classes(cfg["dataset"]["name"])
-    is_cifar = "cifar" in cfg["dataset"]["name"]
-
-    training_transform = create_simclr_data_augmentation(
-        cfg["dataset"]["strength"], size=cfg["dataset"]["size"]
-    )
-    val_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),])
-
-    training_dataset, validation_dataset = fetch_dataset(
-        dataset_name, training_transform, val_transform
-    )
-    training_data_loader, validation_data_loader = create_data_loaders(
-        num_workers=cfg["experiment"]["num_workers"],
-        batch_size=cfg["experiment"]["batches"],
-        training_dataset=training_dataset,
-        validation_dataset=validation_dataset,
-    )
-
-    if rank == 0:
-        logger.info(
-            "#train: {}, #val: {}".format(
-                len(training_dataset), len(validation_dataset)
-            )
-        )
-
-    model = SupervisedModel(
-        base_cnn=cfg["architecture"]["base_cnn"],
-        num_classes=num_classes,
-        is_cifar=is_cifar,
-    )
-    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = model.to(rank)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
-
-    learning(cfg, training_data_loader, validation_data_loader, model)
+    torch.distributed.barrier()
 
 
 if __name__ == "__main__":
     """
     To run this code,
-    `python launch.py --nproc_per_node={The number of GPUs on a single machine} supervised.py`
+    `torchrun --nproc_per_node={The number of GPUs on a single machine} supervised.py`
     """
     main()

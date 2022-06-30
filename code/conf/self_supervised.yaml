@@ -1,6 +1,6 @@
 # @package _group_
 defaults:
-    - architecture: smaller
+    - architecture: resnet18
     - dataset: cifar100
     - experiment: training/cifar
     - optimizer: simclr
@@ -8,6 +8,5 @@ defaults:
     - distributed: base
     - hydra/output: custom
 
-parameter:
-    algorithm: self_supervised
-    d: 128 # dimensionality of feature representation
+name: self_supervised
+d: 128 # dimensionality of feature representation

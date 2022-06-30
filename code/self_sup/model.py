@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 import torch
-from torchvision.models import resnet18, resnet50
+from torchvision.models import resnet18, resnet34, resnet50
 
 
 class NonLinearClassifier(torch.nn.Module):
@@ -181,44 +181,27 @@ class ContrastiveModel(torch.nn.Module):
 
 
 class SupervisedModel(torch.nn.Module):
-    def __init__(
-        self, base_cnn: str = "resnet18", num_classes: int = 10, is_cifar: bool = True
-    ):
-        """
-        :param base_cnn: name of backbone model.
-        :param num_classes: the number of supervised classes.
-        :param is_cifar: Whether CIFAR10/100 or not.
+    def __init__(self, base_cnn: str = "resnet18", num_classes: int = 10):
+        """Instantiate ResNet-{18,34,50} as a supervised classifier.
+
+        Args:
+            base_cnn (str): name of backbone model. Defaults to "resnet18".
+            num_classes (int): the number of supervised classes. Defaults to 10.
         """
 
-        assert base_cnn in {"resnet18", "resnet50"}
+        assert base_cnn in {"resnet18", "resnet34", "resnet50"}
         super(SupervisedModel, self).__init__()
 
         if base_cnn == "resnet50":
             self.f = resnet50()
             num_last_hidden_units = 2048
-        elif base_cnn == "resnet18":
+        elif base_cnn == "resnet34":
+            self.f = resnet34()
+            pass
+            # num_last_hidden_units =
+        else:
             self.f = resnet18()
             num_last_hidden_units = 512
-
-            if is_cifar:
-                # replace the first conv2d with smaller conv
-                self.f.conv1 = torch.nn.Conv2d(
-                    in_channels=3,
-                    out_channels=64,
-                    stride=1,
-                    kernel_size=3,
-                    padding=3,
-                    bias=False,
-                )
-
-                # remove the first max pool
-                self.f.maxpool = torch.nn.Identity()
-        else:
-            raise ValueError(
-                "`base_cnn` must be either `resnet18` or `resnet50`. `{}` is unsupported.".format(
-                    base_cnn
-                )
-            )
 
         self.f.fc = torch.nn.Linear(num_last_hidden_units, num_classes)
 
@@ -227,98 +210,21 @@ class SupervisedModel(torch.nn.Module):
         return self.f(inputs)
 
 
-class SupervisedFastText(torch.nn.Module):
-    def __init__(
-        self, num_embeddings: int, embedding_dim: int = 10, num_classes: int = 4
-    ) -> None:
-        """
-        :param num_embeddings: The size of vocabulary
-        :param embedding_dim: the dimensionality of feature representations.
-        :param num_classes: the number of supervised classes.
-        """
+def modify_resnet_by_simclr_for_cifar(model: SupervisedModel) -> SupervisedModel:
+    """By following SimCLR v1 paper, this function replaces a few layers for CIFAR-10 experiments.
 
-        super(SupervisedFastText, self).__init__()
+    Args:
+        model: Instance of `SupervisedModel`.
 
-        self._num_embeddings = num_embeddings
-        self._embedding_dim = embedding_dim
+    Returns:
+        SupervisedModel: Modified `SupervisedModel`.
+    """
 
-        self.f = torch.nn.Sequential(
-            OrderedDict(
-                [
-                    (
-                        "embeddings",
-                        torch.nn.EmbeddingBag(
-                            num_embeddings=num_embeddings,
-                            embedding_dim=embedding_dim,
-                            sparse=False,
-                        ),
-                    ),
-                    ("fc", torch.nn.Linear(embedding_dim, num_classes, bias=False)),
-                ]
-            )
-        )
+    # replace the first conv2d with smaller conv
+    model.f.conv1 = torch.nn.Conv2d(
+        in_channels=3, out_channels=64, stride=1, kernel_size=3, padding=3, bias=False,
+    )
 
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        """
-        fasttext's parameter initialization.
-        """
-        # https://github.com/facebookresearch/fastText/blob/25d0bb04bf43d8b674fe9ae5722ef65a0856f5d6/src/fasttext.cc#L669
-        upper = 1.0 / self._embedding_dim
-        self.f.embeddings.weight.data.uniform_(-upper, upper)
-
-        # https://github.com/facebookresearch/fastText/blob/25d0bb04bf43d8b674fe9ae5722ef65a0856f5d6/src/fasttext.cc#L677
-        self.f.fc.weight.data.zero_()
-
-    def forward(self, inputs: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
-        return self.f.fc(self.f.embeddings(inputs, offsets))
-
-
-class ContrastiveFastText(torch.nn.Module):
-    def __init__(
-        self,
-        num_embeddings: int,
-        embedding_dim: int = 10,
-        num_last_hidden_units: int = 128,
-        with_projection_head=True,
-    ) -> None:
-        """
-        :param num_embeddings: The size of vocabulary
-        :param embedding_dim: the dimensionality of feature representations.
-        :param num_last_hidden_units: the number of units in the final layer. If `with_projection_head` is False,
-            this value is ignored.
-        :param with_projection_head: bool flag whether or not to use additional linear layer whose dimensionality is
-            `num_last_hidden_units`.
-        """
-
-        super(ContrastiveFastText, self).__init__()
-
-        self._num_embeddings = num_embeddings
-        self._embedding_dim = embedding_dim
-        self._num_last_hidden_units = num_last_hidden_units
-        self._with_projection_head = with_projection_head
-
-        self.f = torch.nn.EmbeddingBag(
-            num_embeddings=num_embeddings, embedding_dim=embedding_dim, sparse=False
-        )
-
-        if self._with_projection_head:
-            self.g = ProjectionHead(num_last_hidden_units, embedding_dim)
-        else:
-            self.g = torch.nn.Identity()
-
-    def encode(self, inputs: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
-        """
-        taken inputs and its offsets, extract feature representation.
-        """
-        return self.f(inputs, offsets)  # (B, embedding_dim)
-
-    def forward(self, inputs: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
-        """
-        taken inputs and its offsets, extract feature representation, then apply additional feature transform
-        to calculate contrastive loss.
-        """
-        h = self.encode(inputs, offsets)
-        z = self.g(h)
-        return z  # (B, embedding_dim) or (B, num_last_hidden_units) depending on `with_projection_head`
+    # remove the first max pool
+    model.f.maxpool = torch.nn.Identity()
+    return model

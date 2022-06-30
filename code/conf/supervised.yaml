@@ -1,14 +1,13 @@
-# @package _group_
 defaults:
-    - architecture: smaller
+    - _self_
+    - architecture: resnet18
     - dataset: cifar100
+    - augmentation: cifar
     - experiment: training/cifar
     - optimizer: supervised
     - distributed: base
-    - hydra/output: supervised
+    - lr_scheduler: simsiam
+    - override hydra/output: supervised
 
-parameter:
-    algorithm: supervised
-    classification_results_json_fname: results.json
-    metric: acc # loss or acc
-    save_predictions: false
+name: supervised
+hydra/job/chdir: true
