@@ -57,6 +57,7 @@ def validation(
 
     return sum_loss, num_corrects
 
+
 # TODO (nzw0301):Version_base=None changes working dir somehow, so remove it as a hotfix...
 @hydra.main(config_path="conf", config_name="supervised")
 def main(cfg: OmegaConf):
@@ -112,9 +113,7 @@ def main(cfg: OmegaConf):
     if validation_dataset is None:
         validation_data_loader = test_data_loader
         num_val_samples = num_test_samples
-        logger.info(
-            f"NOTE: Use test dataset as validation dataset."
-        )
+        logger.info(f"NOTE: Use test dataset as validation dataset.")
 
     num_val_samples = len(validation_data_loader.dataset)
 
