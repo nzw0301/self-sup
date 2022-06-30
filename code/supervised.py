@@ -7,10 +7,12 @@ import hydra
 import numpy as np
 import torch
 import wandb
+from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy
 from torch.utils.data import DataLoader
+
 
 from self_sup.wandb_utils import flatten_omegaconf
 from self_sup.data.transforms import get_data_augmentation
@@ -21,7 +23,7 @@ from self_sup.data.utils import (
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
-from self_sup.model import SupervisedModel
+from self_sup.model import SupervisedModel, modify_resnet_by_simclr_for_cifar
 
 
 def validation(
@@ -105,8 +107,16 @@ def main(cfg: OmegaConf):
     num_train_samples_per_epoch = (
         train_batch_size * len(train_data_loader) * cfg["distributed"]["world_size"]
     )
-    num_val_samples = len(validation_dataset)
     num_test_samples = len(test_dataset)
+
+    if validation_dataset is None:
+        validation_data_loader = test_data_loader
+        num_val_samples = num_test_samples
+        logger.info(
+            f"NOTE: Use test dataset as validation dataset."
+        )
+
+    num_val_samples = len(validation_data_loader.dataset)
 
     if local_rank == 0:
         logger.info(
@@ -124,6 +134,10 @@ def main(cfg: OmegaConf):
     model = SupervisedModel(
         base_cnn=cfg["architecture"]["name"], num_classes=num_classes
     )
+    # Without this modificaiton for resnet-18 on CIFAR-10, the final accuracy drops about 5%.
+    # TODO: varify larger networks too.
+    if "cifar" in cfg["dataset"]["name"]:
+        model = modify_resnet_by_simclr_for_cifar(model)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = model.to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
@@ -150,6 +164,7 @@ def main(cfg: OmegaConf):
         nesterov=False,
         weight_decay=cfg["optimizer"]["decay"],
     )
+    # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
     scaler = GradScaler()
 
@@ -240,7 +255,6 @@ def main(cfg: OmegaConf):
 
         wandb.run.summary["supervised_test_loss"] = test_loss
         wandb.run.summary["supervised_test_acc"] = test_acc
-        wandb.save(str(save_fname))
 
         log_message = f"test loss:{test_loss:.3f}, test acc:{test_acc:.3f}"
         logger.info(log_message)

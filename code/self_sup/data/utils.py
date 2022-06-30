@@ -47,7 +47,7 @@ def create_data_loaders_from_datasets(
     validation_dataset: Optional[torch.utils.data.Dataset] = None,
     test_dataset: Optional[torch.utils.data.Dataset] = None,
     distributed: bool = True,
-) -> List[torch.utils.data.DataLoader]:
+) -> List[Optional[torch.utils.data.DataLoader]]:
     """
     Given pytorch datasets, create data loaders.
 
@@ -76,6 +76,8 @@ def create_data_loaders_from_datasets(
                 drop_last=True,
             )
         )
+    else:
+        data_loaders.append(None)
 
     for dataset, batch_size in zip(
         (validation_dataset, test_dataset), (validation_batch_size, test_batch_size)
@@ -91,6 +93,8 @@ def create_data_loaders_from_datasets(
                     drop_last=False,
                 )
             )
+        else:
+            data_loaders.append(None)
 
     return data_loaders
 
