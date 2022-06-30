@@ -6,7 +6,7 @@ import torch
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
-
+from self_sup.logger import get_logger
 from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.transforms import SimCLRTransforms
 from self_sup.data.utils import create_data_loaders_from_datasets, fetch_dataset
@@ -46,19 +46,53 @@ def exclude_from_wt_decay(
     )
 
 
-def train(
-    cfg: OmegaConf,
-    training_data_loader: torch.utils.data.DataLoader,
-    model: ContrastiveModel,
-) -> None:
-    """
-    Training function.
 
-    :param cfg: Hydra's config instance.
-    :param training_data_loader: Training data loader for contrastive learning.
-    :param model: Self-supervised model.
-    :return: None
-    """
+
+@hydra.main(config_path="conf", config_name="simclr_config")
+def main(cfg: OmegaConf):
+    init_ddp(cfg)
+
+    seed = cfg["experiment"]["seed"]
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    local_rank = cfg["distributed"]["local_rank"]
+    logger.info("Using {}".format(local_rank))
+
+    transform = SimCLRTransforms(
+        strength=cfg["dataset"]["strength"],
+        size=cfg["dataset"]["size"],
+        num_views=cfg["dataset"]["num_views"],
+    )
+
+    dataset_name = cfg["dataset"]["name"].lower()
+
+    training_dataset = fetch_dataset(dataset_name, transform, None, include_val=False)
+
+    training_data_loader = create_data_loaders_from_datasets(
+        num_workers=cfg["experiment"]["num_workers"],
+        batch_size=cfg["experiment"]["batches"],
+        train_dataset=training_dataset,
+        validation_dataset=None,
+    )[0]
+
+    is_cifar = "cifar" in cfg["dataset"]["name"]
+
+    if local_rank == 0:
+        logger.info("#train: {}".format(len(training_data_loader.dataset)))
+
+    model = ContrastiveModel(
+        base_cnn=cfg["architecture"]["base_cnn"],
+        d=cfg["parameter"]["d"],
+        is_cifar=is_cifar,
+    )
+    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    model = model.to(local_rank)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+
     local_rank = cfg["distributed"]["local_rank"]
     epochs = cfg["experiment"]["epochs"]
     # because the drop=True in data loader,
@@ -128,62 +162,6 @@ def train(
                     epoch, cfg["experiment"]["output_model_name"]
                 )
                 torch.save(model.state_dict(), save_fname)
-
-
-@hydra.main(config_path="conf", config_name="simclr_config")
-def main(cfg: OmegaConf):
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.terminator = ""
-    logger.addHandler(stream_handler)
-
-    init_ddp(cfg)
-    check_hydra_conf(cfg)
-
-    seed = cfg["experiment"]["seed"]
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-    rank = cfg["distributed"]["local_rank"]
-    logger.info("Using {}".format(rank))
-
-    transform = SimCLRTransforms(
-        strength=cfg["dataset"]["strength"],
-        size=cfg["dataset"]["size"],
-        num_views=cfg["dataset"]["num_views"],
-    )
-
-    dataset_name = cfg["dataset"]["name"].lower()
-
-    training_dataset = fetch_dataset(dataset_name, transform, None, include_val=False)
-
-    training_data_loader = create_data_loaders_from_datasets(
-        num_workers=cfg["experiment"]["num_workers"],
-        batch_size=cfg["experiment"]["batches"],
-        train_dataset=training_dataset,
-        validation_dataset=None,
-    )[0]
-
-    is_cifar = "cifar" in cfg["dataset"]["name"]
-
-    if rank == 0:
-        logger.info("#train: {}".format(len(training_data_loader.dataset)))
-
-    model = ContrastiveModel(
-        base_cnn=cfg["architecture"]["base_cnn"],
-        d=cfg["parameter"]["d"],
-        is_cifar=is_cifar,
-    )
-    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = model.to(rank)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[rank])
-
-    train(cfg, training_data_loader, model)
 
 
 if __name__ == "__main__":
