@@ -7,7 +7,6 @@ import hydra
 import numpy as np
 import torch
 import wandb
-from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy
@@ -133,8 +132,8 @@ def main(cfg: OmegaConf):
     model = SupervisedModel(
         base_cnn=cfg["architecture"]["name"], num_classes=num_classes
     )
-    # Without this modificaiton for resnet-18 on CIFAR-10, the final accuracy drops about 5%.
-    # TODO: varify larger networks too.
+    # Without this modification for resnet-18 on CIFAR-10, the final accuracy drops about 5%.
+    # TODO: check larger networks too.
     if "cifar" in cfg["dataset"]["name"]:
         model = modify_resnet_by_simclr_for_cifar(model)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)

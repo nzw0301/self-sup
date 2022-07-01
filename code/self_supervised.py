@@ -1,4 +1,5 @@
 import logging
+import os
 
 import hydra
 import numpy as np
@@ -46,43 +47,57 @@ def exclude_from_wt_decay(
     )
 
 
-
-
-@hydra.main(config_path="conf", config_name="simclr_config")
+@hydra.main(config_path="conf", config_name="simclr")
 def main(cfg: OmegaConf):
-    init_ddp(cfg)
+    logger = get_logger()
 
+    local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
+    init_ddp(cfg, local_rank)
+
+    # for reproducibility
     seed = cfg["experiment"]["seed"]
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    rnd = np.random.RandomState(seed)
 
-    local_rank = cfg["distributed"]["local_rank"]
     logger.info("Using {}".format(local_rank))
 
-    transform = SimCLRTransforms(
-        strength=cfg["dataset"]["strength"],
-        size=cfg["dataset"]["size"],
-        num_views=cfg["dataset"]["num_views"],
+    train_dataset, _, _ = get_train_val_test_datasets(
+        rnd=rnd,
+        root=cfg["dataset"]["root"],
+        validation_ratio=cfg["dataset"]["validation_ratio"],
+        dataset_name=cfg["dataset"]["name"],
+        normalize=cfg["dataset"]["normalize"],
+    )
+    train_dataset.transform = SimCLRTransforms(
+        strength=cfg["dataset"]["strength"], size=cfg["dataset"]["size"]
     )
 
-    dataset_name = cfg["dataset"]["name"].lower()
-
-    training_dataset = fetch_dataset(dataset_name, transform, None, include_val=False)
-
-    training_data_loader = create_data_loaders_from_datasets(
+    train_data_loader = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
-        batch_size=cfg["experiment"]["batches"],
-        train_dataset=training_dataset,
-        validation_dataset=None,
+        train_batch_size=train_batch_size,
+        ddp_sampler_seed=seed,
+        train_dataset=train_dataset,
+        distributed=True,
     )[0]
 
-    is_cifar = "cifar" in cfg["dataset"]["name"]
+    train_batch_size = cfg["experiment"]["train_batch_size"]
+    num_gpus = cfg["distributed"]["world_size"]
+    num_train_samples_per_epoch = train_batch_size * len(train_data_loader) * num_gpus
 
     if local_rank == 0:
-        logger.info("#train: {}".format(len(training_data_loader.dataset)))
+        logger.info("#train: {}".format(len(train_data_loader.dataset)))
+        wandb.init(
+            dir=hydra.utils.get_original_cwd(),
+            project="self-sup",
+            entity="nzw0301",
+            config=flatten_omegaconf(cfg),
+            tags=(cfg["dataset"]["name"], "simclr"),
+            group="seed-{}".format(seed),
+        )
 
     model = ContrastiveModel(
         base_cnn=cfg["architecture"]["base_cnn"],
@@ -92,14 +107,6 @@ def main(cfg: OmegaConf):
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model = model.to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
-
-    local_rank = cfg["distributed"]["local_rank"]
-    epochs = cfg["experiment"]["epochs"]
-    # because the drop=True in data loader,
-    steps_per_epoch = len(training_data_loader)
-    total_steps = epochs * steps_per_epoch
-    warmup_steps = cfg["optimizer"]["warmup_epochs"] * steps_per_epoch
-    current_step = 0
 
     model.train()
     simclr_loss_function = NT_Xent(
@@ -124,9 +131,9 @@ def main(cfg: OmegaConf):
     )
 
     for epoch in range(1, epochs + 1):
-        training_data_loader.sampler.set_epoch(epoch)
+        train_data_loader.sampler.set_epoch(epoch)
 
-        for views, _ in training_data_loader:
+        for views, _ in train_data_loader:
             # adjust learning rate by applying linear warming
             if current_step <= warmup_steps:
                 lr = calculate_warmup_lr(cfg, warmup_steps, current_step)
