@@ -17,6 +17,7 @@ def test_expected_shape(reduction: str) -> None:
     else:
         assert loss.size() == (2, batch_size)
 
+
 @pytest.mark.parametrize("reduction", ("mean", "sum", "none"))
 def test_positive_values(reduction: str) -> None:
     batch_size = 32
@@ -27,7 +28,8 @@ def test_positive_values(reduction: str) -> None:
     loss = nt_xent(feature_0, feature_1)
     assert all(loss.numpy().flatten() > 0)
 
-@pytest.mark.parametrize("t", (-1, 0.))
+
+@pytest.mark.parametrize("t", (-1, 0.0))
 def test_error_temperature(t: float) -> None:
 
     with pytest.raises(ValueError):
