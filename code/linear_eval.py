@@ -7,7 +7,6 @@ import torch
 import torchvision
 import yaml
 from omegaconf import OmegaConf
-
 from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.transforms import create_simclr_data_augmentation
 from self_sup.data.utils import (

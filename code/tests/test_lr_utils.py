@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 
 

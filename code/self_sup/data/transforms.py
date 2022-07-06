@@ -1,6 +1,9 @@
+from typing import List
+
 import numpy as np
-from torchvision import transforms
+import torch
 from omegaconf import OmegaConf
+from torchvision import transforms
 
 
 class RandomGaussianBlur(object):
@@ -56,8 +59,10 @@ def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Co
     return transforms.Compose(common_transforms)
 
 
-class SimCLRTransforms(object):
-    def __init__(self, strength: float = 0.5, size: int = 32, num_views: int = 2):
+class SimCLRTransforms:
+    def __init__(
+        self, strength: float = 0.5, size: int = 32, num_views: int = 2
+    ) -> None:
         # Definition is from Appendix A. of SimCLRv1 paper:
         # https://arxiv.org/pdf/2002.05709.pdf
 
@@ -66,10 +71,10 @@ class SimCLRTransforms(object):
         if num_views <= 1:
             raise ValueError("`num_views` must be greater than 1.")
 
-        self.num_views = num_views
+        self._num_views = num_views
 
-    def __call__(self, x) -> list:
-        return [self.transform(x) for _ in range(self.num_views)]
+    def __call__(self, x) -> List[torch.Tensor]:
+        return [self.transform(x) for _ in range(self._num_views)]
 
 
 def get_data_augmentation(cfg: OmegaConf):

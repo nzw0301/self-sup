@@ -1,20 +1,23 @@
 import logging
 import os
 
+from pathlib import Path
 import hydra
 import numpy as np
 import torch
+import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
-from self_sup.logger import get_logger
 from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.transforms import SimCLRTransforms
-from self_sup.data.utils import create_data_loaders_from_datasets, fetch_dataset
+from self_sup.data.utils import create_data_loaders_from_datasets
 from self_sup.distributed_utils import init_ddp
+from self_sup.logger import get_logger
 from self_sup.loss import NT_Xent
-from self_sup.lr_utils import calculate_initial_lr, calculate_warmup_lr
+from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 from self_sup.model import ContrastiveModel
+from self_sup.wandb_utils import flatten_omegaconf
+from torch.cuda.amp import GradScaler
 
 
 def exclude_from_wt_decay(
@@ -63,7 +66,7 @@ def main(cfg: OmegaConf):
     torch.backends.cudnn.benchmark = False
     rnd = np.random.RandomState(seed)
 
-    logger.info("Using {}".format(local_rank))
+    logger.info("Using cuda:{}".format(local_rank))
 
     train_dataset, _, _ = get_train_val_test_datasets(
         rnd=rnd,
@@ -73,9 +76,10 @@ def main(cfg: OmegaConf):
         normalize=cfg["dataset"]["normalize"],
     )
     train_dataset.transform = SimCLRTransforms(
-        strength=cfg["dataset"]["strength"], size=cfg["dataset"]["size"]
+        strength=cfg["augmentation"]["strength"], size=cfg["augmentation"]["size"],
     )
 
+    train_batch_size = cfg["experiment"]["train_batch_size"]
     train_data_loader = create_data_loaders_from_datasets(
         num_workers=cfg["experiment"]["num_workers"],
         train_batch_size=train_batch_size,
@@ -84,9 +88,10 @@ def main(cfg: OmegaConf):
         distributed=True,
     )[0]
 
-    train_batch_size = cfg["experiment"]["train_batch_size"]
     num_gpus = cfg["distributed"]["world_size"]
     num_train_samples_per_epoch = train_batch_size * len(train_data_loader) * num_gpus
+
+    is_cifar = "cifar" in cfg["dataset"]["name"]
 
     if local_rank == 0:
         logger.info("#train: {}".format(len(train_data_loader.dataset)))
@@ -95,7 +100,7 @@ def main(cfg: OmegaConf):
             project="self-sup",
             entity="nzw0301",
             config=flatten_omegaconf(cfg),
-            tags=(cfg["dataset"]["name"], "simclr"),
+            tags=(cfg["dataset"]["name"], "SimCLR"),
             group="seed-{}".format(seed),
         )
 
@@ -108,67 +113,81 @@ def main(cfg: OmegaConf):
     model = model.to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
-    model.train()
     simclr_loss_function = NT_Xent(
         temperature=cfg["loss"]["temperature"], device=local_rank
     )
 
+    epochs = cfg["experiment"]["epochs"]
+    init_lr = calculate_scaled_lr(
+        base_lr=cfg["optimizer"]["lr"],
+        batch_size=train_batch_size,
+        lr_schedule=cfg["lr_scheduler"]["name"],
+    )
     optimizer = torch.optim.SGD(
         params=exclude_from_wt_decay(
             model.named_parameters(), weight_decay=cfg["optimizer"]["decay"]
         ),
-        lr=calculate_initial_lr(cfg),
+        lr=init_lr,
         momentum=cfg["optimizer"]["momentum"],
-        nesterov=False,
-        weight_decay=0.0,
+    )
+    lr_list = calculate_lr_list(
+        init_lr,
+        num_lr_updates_per_epoch=len(train_data_loader),
+        warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
+        epochs=epochs,
     )
 
     # https://github.com/google-research/simclr/blob/master/lars_optimizer.py#L26
     optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
-    cos_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer.optim, T_max=total_steps - warmup_steps,
-    )
+    scaler = GradScaler()
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(epochs):
+        model.train()
         train_data_loader.sampler.set_epoch(epoch)
+        sum_train_loss = torch.tensor([0.0], device=local_rank)
 
-        for views, _ in train_data_loader:
-            # adjust learning rate by applying linear warming
-            if current_step <= warmup_steps:
-                lr = calculate_warmup_lr(cfg, warmup_steps, current_step)
-                for param_group in optimizer.param_groups:
-                    param_group["lr"] = lr
+        for views, _ in enumerate(train_data_loader):
+            # Adjust learning rate by applying linear warming
+            # update learning rate
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr_list[epoch]
 
             optimizer.zero_grad()
-            zs = [model(view.to(local_rank)) for view in views]
-            loss = simclr_loss_function(zs)
 
-            loss.backward()
-            optimizer.step()
+            views = [view.to(local_rank) for view in views]
+            with torch.autocast("cuda"):
+                z_0 = model(views[0])
+                z_1 = model(views[1])
+                loss = simclr_loss_function(z_0, z_1)
 
-            # adjust learning rate by applying cosine annealing
-            if current_step > warmup_steps:
-                cos_lr_scheduler.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            sum_train_loss += loss.item() * train_batch_size
 
-            current_step += 1
+        torch.distributed.reduce(sum_train_loss, dst=0)
 
         if local_rank == 0:
+            progress = (epoch + 1) / (epochs + 1)
+            avg_train_loss = sum_train_loss.item() / num_train_samples_per_epoch
             logging.info(
                 "Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
                     epoch,
                     epochs,
-                    epoch / epochs,
-                    loss.item(),
+                    progress,
+                    avg_train_loss,
                     optimizer.param_groups[0]["lr"],
                 )
             )
 
-            if epoch % cfg["experiment"]["save_model_epoch"] == 0 or epoch == epochs:
-                save_fname = "epoch_{}-{}".format(
-                    epoch, cfg["experiment"]["output_model_name"]
-                )
-                torch.save(model.state_dict(), save_fname)
+            # send metrics to wandb
+            wandb.log(
+                data={"train_contrastive_loss": avg_train_loss}, step=epoch,
+            )
+
+    save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
+    torch.save(model.state_dict(), save_fname)
 
 
 if __name__ == "__main__":

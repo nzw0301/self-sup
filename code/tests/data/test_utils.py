@@ -1,12 +1,11 @@
 import numpy as np
 import pytest
-from torchvision.datasets.cifar import CIFAR10
-
 from self_sup.data.utils import (
     _train_val_split,
     create_data_loaders_from_datasets,
     get_train_val_test_datasets,
 )
+from torchvision.datasets.cifar import CIFAR10
 
 root = "~/pytorch_data"
 

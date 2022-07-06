@@ -7,8 +7,6 @@ import torch
 import torchvision
 import yaml
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
-
 from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.dataset import DownstreamDataset
 from self_sup.data.transforms import create_simclr_data_augmentation
@@ -19,6 +17,7 @@ from self_sup.data.utils import (
 )
 from self_sup.eval_utils import centroid_eval, convert_vectors
 from self_sup.model import CentroidClassifier, ContrastiveModel
+from torch.utils.data import DataLoader
 
 
 @hydra.main(config_path="conf", config_name="eval_config")

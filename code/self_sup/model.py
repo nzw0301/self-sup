@@ -121,42 +121,31 @@ class ProjectionHead(torch.nn.Module):
 class ContrastiveModel(torch.nn.Module):
     def __init__(self, base_cnn: str = "resnet18", d: int = 128, is_cifar: bool = True):
         """
-        :param base_cnn: The backbone's model name. resnet18 or resnet50.
+        CNN architecture used in SimCLR v1.
+
+        :param base_cnn: The backbone's model name. resnet18, resnet34, or resnet50.
         :param d: The dimensionality of the output feature.
         :param is_cifar:
             model is for CIFAR10/100 or not.
             If it is `True`, network is modified by following SimCLR's experiments.
         """
 
-        assert base_cnn in {"resnet18", "resnet50"}
+        assert base_cnn in {"resnet18", "resnet34", "resnet50"}
         super(ContrastiveModel, self).__init__()
 
         if base_cnn == "resnet50":
             self.f = resnet50()
             num_last_hidden_units = 2048
-        elif base_cnn == "resnet18":
+        elif base_cnn == "resnet34":
+            self.f = resnet34()
+            num_last_hidden_units = 512
+        else:  # resnet18
             self.f = resnet18()
             num_last_hidden_units = 512
 
+            # TODO(nzw0301): should apply to the other resnet too?
             if is_cifar:
-                # replace the first conv2d with smaller conv
-                self.f.conv1 = torch.nn.Conv2d(
-                    in_channels=3,
-                    out_channels=64,
-                    stride=1,
-                    kernel_size=3,
-                    padding=3,
-                    bias=False,
-                )
-
-                # remove the first max pool
-                self.f.maxpool = torch.nn.Identity()
-        else:
-            raise ValueError(
-                "`base_cnn` must be either `resnet18` or `resnet50`. `{}` is unsupported.".format(
-                    base_cnn
-                )
-            )
+                self.f = modify_resnet_by_simclr_for_cifar(self.f)
 
         # drop the last classification layer
         self.f.fc = torch.nn.Identity()
@@ -164,7 +153,7 @@ class ContrastiveModel(torch.nn.Module):
         # non-linear projection head
         self.g = ProjectionHead(num_last_hidden_units, d)
 
-    def encode(self, inputs: torch.FloatTensor) -> torch.FloatTensor:
+    def encode(self, inputs: torch.Tensor) -> torch.Tensor:
         """
         return features before projection head.
         :param inputs: FloatTensor that contains images.
@@ -173,7 +162,7 @@ class ContrastiveModel(torch.nn.Module):
 
         return self.f(inputs)  # N x num_last_hidden_units
 
-    def forward(self, inputs: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
 
         h = self.encode(inputs)
         z = self.g(h)
@@ -181,7 +170,7 @@ class ContrastiveModel(torch.nn.Module):
 
 
 class SupervisedModel(torch.nn.Module):
-    def __init__(self, base_cnn: str = "resnet18", num_classes: int = 10):
+    def __init__(self, base_cnn: str = "resnet18", num_classes: int = 10) -> None:
         """Instantiate ResNet-{18,34,50} as a supervised classifier.
 
         Args:
@@ -197,8 +186,7 @@ class SupervisedModel(torch.nn.Module):
             num_last_hidden_units = 2048
         elif base_cnn == "resnet34":
             self.f = resnet34()
-            pass
-            # num_last_hidden_units =
+            num_last_hidden_units = 512
         else:
             self.f = resnet18()
             num_last_hidden_units = 512
