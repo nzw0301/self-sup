@@ -121,6 +121,17 @@ def test_create_data_loaders_from_datasets():
     assert val_loader.batch_size == 2
     assert test_loader.batch_size == 3
 
+
+def test_create_data_loaders_from_datasets_only_train_data():
+    num_original_train_samples = 50_000
+    seed = 7
+    ratio = 0.1
+    num_workers = 1
+    rnd = np.random.RandomState(seed)
+    train = get_train_val_test_datasets(
+        rnd=rnd, validation_ratio=ratio, dataset_name="cifar10"
+    )[0]
+
     # Only train dataloader.
     loaders = create_data_loaders_from_datasets(
         num_workers=num_workers,
@@ -128,5 +139,7 @@ def test_create_data_loaders_from_datasets():
         train_dataset=train,
         distributed=False,
     )
-    assert len(loaders) == 1
+    assert len(loaders) == 3
     assert len(loaders[0].dataset) == int(num_original_train_samples * (1.0 - ratio))
+    assert loaders[1] is None
+    assert loaders[2] is None
