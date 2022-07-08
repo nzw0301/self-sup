@@ -15,6 +15,7 @@ from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from self_sup.data.transforms import SimCLRTransforms
 from self_sup.data.utils import create_data_loaders_from_datasets
+from self_sup.data.utils import get_train_val_test_datasets
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.loss import NT_Xent
@@ -25,10 +26,10 @@ from torch.cuda.amp import GradScaler
 
 
 def exclude_from_wt_decay(
-    named_params: Iterator[str, torch.nn.parameter.Parameter],
+    named_params: Iterator,
     weight_decay: float,
     skip_list: Sequence[str] = ("bias", "bn"),
-) -> Tuple[Dict[str, Union[float, torch.nn.parameter.Parameter]]]:
+) -> Tuple[Dict[str, Union[float, torch.nn.parameter.Parameter]], Dict[str, Union[float, torch.nn.parameter.Parameter]]]:
     """
     :param named_params: Model's named params. Usually, retuned value of `model.named_parameters()`.
     :param weight_decay: weight_decay's parameter.
@@ -111,7 +112,7 @@ def main(cfg: OmegaConf) -> None:
         )
 
     model = ContrastiveModel(
-        base_cnn=cfg["architecture"]["base_cnn"],
+        base_cnn=cfg["architecture"]["name"],
         d=cfg["parameter"]["d"],
         is_cifar=is_cifar,
     )

@@ -10,5 +10,5 @@ defaults:
     - optimizer: simclr
     - override hydra/output: custom
 
-name: self_supervised
+name: simclr
 d: 128 # dimensionality of feature representation
