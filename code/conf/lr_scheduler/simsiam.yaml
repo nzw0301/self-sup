@@ -1,4 +1,4 @@
 # @package _global_
 lr_scheduler:
-    name: "square"
-    warmup_epochs: 10
+    name: "linear"
+    warmup_epochs: 0

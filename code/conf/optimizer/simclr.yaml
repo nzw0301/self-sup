@@ -1,5 +1,5 @@
 # @package _global_
 optimizer:
-    momentum: 0.9
-    lr: 1.0 # learning rate
     decay: 1e-4 # weight decay
+    lr: 1.0 # learning rate
+    momentum: 0.9

@@ -1,12 +1,12 @@
 defaults:
     - _self_
     - architecture: resnet18
+    - augmentation: simclr
     - dataset: cifar100
-    - augmentation: cifar
-    - experiment: training/cifar
-    - optimizer: supervised
     - distributed: base
-    - lr_scheduler: simsiam
+    - experiment: training/cifar
+    - lr_scheduler: simclr
+    - optimizer: supervised
     - override hydra/output: supervised
 
 name: supervised
