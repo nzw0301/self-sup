@@ -2,13 +2,17 @@ import logging
 import os
 
 from pathlib import Path
+from typing import Union
+from typing import Dict
+from typing import Sequence
+from typing import Tuple
+from typing import Iterator
 import hydra
 import numpy as np
 import torch
 import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
-from self_sup.check_hydra_conf import check_hydra_conf
 from self_sup.data.transforms import SimCLRTransforms
 from self_sup.data.utils import create_data_loaders_from_datasets
 from self_sup.distributed_utils import init_ddp
@@ -21,13 +25,15 @@ from torch.cuda.amp import GradScaler
 
 
 def exclude_from_wt_decay(
-    named_params, weight_decay, skip_list=("bias", "bn")
-) -> tuple:
+    named_params: Iterator[str, torch.nn.parameter.Parameter],
+    weight_decay: float,
+    skip_list: Sequence[str] = ("bias", "bn"),
+) -> Tuple[Dict[str, Union[float, torch.nn.parameter.Parameter]]]:
     """
-    :param named_params: Model's named_params.
+    :param named_params: Model's named params. Usually, retuned value of `model.named_parameters()`.
     :param weight_decay: weight_decay's parameter.
-    :param skip_list: list of names to exclude weight decay.
-    :return: dictionaries
+    :param skip_list: Sequence of names to exclude weight decay, the coefficient is zero.
+    :return: Tuple of two dictionaries to specify the weight decay's co-efficient.
     """
     # https://github.com/nzw0301/pytorch-lightning-bolts/blob/master/pl_bolts/models/self_supervised/simclr/simclr_module.py#L90-L105
     # https://github.com/google-research/simclr/blob/3fb622131d1b6dee76d0d5f6aac67db84dab3800/model_util.py#L99
@@ -51,7 +57,7 @@ def exclude_from_wt_decay(
 
 
 @hydra.main(config_path="conf", config_name="simclr")
-def main(cfg: OmegaConf):
+def main(cfg: OmegaConf) -> None:
     logger = get_logger()
 
     local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
@@ -148,8 +154,9 @@ def main(cfg: OmegaConf):
         sum_train_loss = torch.tensor([0.0], device=local_rank)
 
         for views, _ in enumerate(train_data_loader):
+
             # Adjust learning rate by applying linear warming
-            # update learning rate
+            # update learning rate.
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_list[epoch]
 

@@ -6,12 +6,13 @@ from omegaconf import OmegaConf
 from torchvision import transforms
 
 
-class RandomGaussianBlur(object):
+class RandomGaussianBlur:
     """
     https://github.com/facebookresearch/swav/blob/master/src/multicropdataset.py
     """
 
-    def __call__(self, img):
+    @staticmethod
+    def __call__(img):
         import cv2
 
         if np.random.rand() > 0.5:
@@ -48,7 +49,7 @@ def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Co
         transforms.RandomGrayscale(0.2),
         # end of color_distort
     ]
-    if size == 224:  # imagenet or pet dataset
+    if size == 224:  # ImageNet-1K or pet dataset's shape.
         common_transforms.append(RandomGaussianBlur())
     elif size == 32:
         pass
