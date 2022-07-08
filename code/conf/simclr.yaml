@@ -1,6 +1,7 @@
 # @package _group_
 defaults:
-    - architecture: resnet18
+    - architecture/backbone: backbone/resnet18
+    - architecture/projection_head: projection_head/simclr_v1
     - augmentation: simclr
     - dataset: cifar100
     - distributed: base
@@ -11,4 +12,3 @@ defaults:
     - override hydra/output: custom
 
 name: simclr
-d: 128 # dimensionality of feature representation

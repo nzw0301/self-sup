@@ -1,6 +1,6 @@
 defaults:
     - _self_
-    - architecture: resnet18
+    - architecture: backbone/resnet18
     - augmentation: simclr
     - dataset: cifar100
     - distributed: base

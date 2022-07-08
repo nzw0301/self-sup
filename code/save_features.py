@@ -9,7 +9,7 @@ import yaml
 from omegaconf import OmegaConf
 from self_sup.data.transforms import create_simclr_data_augmentation
 from self_sup.data.utils import create_data_loaders_from_datasets, fetch_dataset
-from self_sup.model import ContrastiveModel
+from code.self_sup.models.contrastive import ContrastiveModel
 
 
 def convert_vectors(

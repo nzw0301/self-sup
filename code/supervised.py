@@ -15,7 +15,7 @@ from self_sup.data.utils import (
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
-from self_sup.model import SupervisedModel, modify_resnet_by_simclr_for_cifar
+from code.self_sup.models.contrastive import SupervisedModel, modify_resnet_by_simclr_for_cifar
 from self_sup.wandb_utils import flatten_omegaconf
 from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy

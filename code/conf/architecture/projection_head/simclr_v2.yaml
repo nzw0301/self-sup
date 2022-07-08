@@ -1,0 +1,5 @@
+# @package _global_
+projection_head:
+    name: simclr_v2_projection_head
+    d: 64 # 64 for cifar and 128 for ImageNet
+    num_hidden_layer: 2 # the number of blocks that consists of affine -> BN -> ReLU. dimensionality of hidden units. this value + 1 is identical to the layers of https://arxiv.org/abs/2011.02803

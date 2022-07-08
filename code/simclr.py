@@ -20,7 +20,8 @@ from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.loss import NT_Xent
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
-from self_sup.model import ContrastiveModel
+from self_sup.models.contrastive import ContrastiveModel
+from self_sup.models.head import ProjectionHead
 from self_sup.wandb_utils import flatten_omegaconf
 from torch.cuda.amp import GradScaler
 
@@ -36,7 +37,7 @@ def exclude_from_wt_decay(
     :param skip_list: Sequence of names to exclude weight decay, the coefficient is zero.
     :return: Tuple of two dictionaries to specify the weight decay's co-efficient.
     """
-    # https://github.com/nzw0301/pytorch-lightning-bolts/blob/master/pl_bolts/models/self_supervised/simclr/simclr_module.py#L90-L105
+    # Based on https://github.com/nzw0301/pytorch-lightning-bolts/blob/master/pl_bolts/models/self_supervised/simclr/simclr_module.py#L90-L105,
     # https://github.com/google-research/simclr/blob/3fb622131d1b6dee76d0d5f6aac67db84dab3800/model_util.py#L99
 
     params = []
@@ -113,7 +114,9 @@ def main(cfg: OmegaConf) -> None:
 
     model = ContrastiveModel(
         base_cnn=cfg["architecture"]["name"],
-        d=cfg["parameter"]["d"],
+        head=ProjectionHead(
+            cfg[""]
+        ),
         is_cifar=is_cifar,
     )
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)

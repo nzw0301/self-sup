@@ -16,7 +16,7 @@ from self_sup.data.utils import (
 )
 from self_sup.distributed_utils import init_ddp
 from self_sup.eval_utils import learnable_eval
-from self_sup.model import ContrastiveModel, LinearClassifier
+from code.self_sup.models.contrastive import ContrastiveModel, LinearClassifier
 
 
 @hydra.main(config_path="conf", config_name="linear_eval_config")
