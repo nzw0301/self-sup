@@ -1,8 +1,7 @@
-# @package _group_
 defaults:
-    - backbone: resnet18
-    - projection_head: simclr_v1
+    - _self_
     - augmentation: simclr
+    - backbone: resnet18
     - dataset: cifar100
     - distributed: base
     - experiment: training/cifar
@@ -10,5 +9,6 @@ defaults:
     - loss: simclr
     - optimizer: simclr
     - override hydra/output: custom
+    - projection_head: simclr_v1
 
 name: simclr
