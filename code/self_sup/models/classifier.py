@@ -1,5 +1,3 @@
-from collections import OrderedDict
-
 import torch
 from torchvision.models import resnet18, resnet34, resnet50
 
@@ -115,26 +113,6 @@ class SupervisedModel(torch.nn.Module):
 
         self.f.fc = torch.nn.Linear(num_last_hidden_units, num_classes)
 
-    def forward(self, inputs: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
 
         return self.f(inputs)
-
-
-def modify_resnet_by_simclr_for_cifar(model: SupervisedModel) -> SupervisedModel:
-    """By following SimCLR v1 paper, this function replaces a few layers for CIFAR-10 experiments.
-
-    Args:
-        model: Instance of `SupervisedModel`.
-
-    Returns:
-        SupervisedModel: Modified `SupervisedModel`.
-    """
-
-    # replace the first conv2d with smaller conv
-    model.f.conv1 = torch.nn.Conv2d(
-        in_channels=3, out_channels=64, stride=1, kernel_size=3, padding=3, bias=False,
-    )
-
-    # remove the first max pool
-    model.f.maxpool = torch.nn.Identity()
-    return model

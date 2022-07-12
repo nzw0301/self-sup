@@ -24,7 +24,9 @@ class ProjectionHead(torch.nn.Module):
             last_dim = latent_dim
 
         # final one
-        head.append(("last_linear", torch.nn.Linear(latent_dim, latent_dim, bias=False)))
+        head.append(
+            ("last_linear", torch.nn.Linear(latent_dim, latent_dim, bias=False))
+        )
         self.projection_head = torch.nn.Sequential(OrderedDict(head))
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:

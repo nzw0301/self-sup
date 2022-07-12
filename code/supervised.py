@@ -15,7 +15,8 @@ from self_sup.data.utils import (
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
-from code.self_sup.models.contrastive import SupervisedModel, modify_resnet_by_simclr_for_cifar
+from self_sup.models.contrastive import modify_resnet_by_simclr_for_cifar
+from self_sup.models.classifier import SupervisedModel
 from self_sup.wandb_utils import flatten_omegaconf
 from torch.cuda.amp import GradScaler
 from torch.nn.functional import cross_entropy
@@ -58,6 +59,7 @@ def validation(
 @hydra.main(config_path="conf", config_name="supervised")
 def main(cfg: OmegaConf):
     logger = get_logger()
+
     # check_hydra_conf(cfg)
 
     local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
@@ -108,8 +110,7 @@ def main(cfg: OmegaConf):
 
     if validation_dataset is None:
         validation_data_loader = test_data_loader
-        num_val_samples = num_test_samples
-        logger.info(f"NOTE: Use test dataset as validation dataset.")
+        logger.info(f"NOTE: Use test dataset as validation dataset too.")
 
     num_val_samples = len(validation_data_loader.dataset)
 
@@ -126,9 +127,7 @@ def main(cfg: OmegaConf):
             group="seed-{}".format(seed),
         )
 
-    model = SupervisedModel(
-        base_cnn=cfg["architecture"]["name"], num_classes=num_classes
-    )
+    model = SupervisedModel(base_cnn=cfg["backbone"]["name"], num_classes=num_classes)
     # Without this modification for resnet-18 on CIFAR-10, the final accuracy drops about 5%.
     # TODO: check larger networks too.
     if "cifar" in cfg["dataset"]["name"]:

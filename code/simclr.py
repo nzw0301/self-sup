@@ -29,10 +29,13 @@ from torch.cuda.amp import GradScaler
 def exclude_from_wt_decay(
     named_params: Iterator,
     weight_decay: float,
-    skip_list: Sequence[str] = ("bias", "bn"),
-) -> Tuple[Dict[str, Union[float, torch.nn.parameter.Parameter]], Dict[str, Union[float, torch.nn.parameter.Parameter]]]:
+    skip_list: Sequence[str] = ("bias", "bn", "projection_head"),
+) -> Tuple[
+    Dict[str, Union[float, torch.nn.parameter.Parameter]],
+    Dict[str, Union[float, torch.nn.parameter.Parameter]],
+]:
     """
-    :param named_params: Model's named params. Usually, retuned value of `model.named_parameters()`.
+    :param named_params: Model's named params. Usually, `model.named_parameters()`.
     :param weight_decay: weight_decay's parameter.
     :param skip_list: Sequence of names to exclude weight decay, the coefficient is zero.
     :return: Tuple of two dictionaries to specify the weight decay's co-efficient.
@@ -113,9 +116,11 @@ def main(cfg: OmegaConf) -> None:
         )
 
     model = ContrastiveModel(
-        base_cnn=cfg["architecture"]["name"],
+        base_cnn=cfg["backbone"]["name"],
         head=ProjectionHead(
-            cfg[""]
+            input_dim=2048 if cfg["backbone"]["name"] == "resnet50" else 512,
+            latent_dim=cfg["projection_head"]["d"],
+            num_non_linear_blocks=cfg["projection_head"]["num_hidden_layer"],
         ),
         is_cifar=is_cifar,
     )
