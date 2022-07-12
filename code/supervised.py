@@ -205,8 +205,8 @@ def main(cfg: OmegaConf):
             val_acc = num_val_corrects.item() / num_val_samples * 100.0
 
             log_message = (
-                f"Epoch:{epoch}/{epochs} progress:{progress:.3f} "
-                f"train loss:{train_loss:.3f}, lr:{lr_for_logging:.7f} "
+                f"Epoch:{epoch}/{epochs} progress:{progress:.3f}, "
+                f"train loss:{train_loss:.3f}, lr:{lr_for_logging:.7f}, "
                 f"val loss:{val_loss:.3f}, val acc:{val_acc:.3f}"
             )
             logger.info(log_message)

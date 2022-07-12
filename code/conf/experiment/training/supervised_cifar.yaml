@@ -6,4 +6,4 @@ experiment:
     num_workers: 3
     output_model_name: model.pt
     seed: 7 # random seed value
-    train_batch_size: 512
+    train_batch_size: 128

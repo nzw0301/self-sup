@@ -36,7 +36,7 @@ class ContrastiveModel(torch.nn.Module):
                 self.f = resnet18()
 
         # drop the last classification layer
-        del self.f.fc
+        self.f.fc = torch.nn.Identity()
 
         # projection head
         if head is not None:
@@ -76,12 +76,12 @@ def modify_resnet_by_simclr_for_cifar(
     conv = torch.nn.Conv2d(
         in_channels=3, out_channels=64, stride=1, kernel_size=3, padding=3, bias=False,
     )
-
+    identity = torch.nn.Identity()
     if isinstance(model, SupervisedModel):
         model.f.conv1 = conv
-        del model.f.maxpool
+        model.f.maxpool = identity
     elif isinstance(model, ResNet):
         model.conv1 = conv
-        del model.maxpool
+        model.maxpool = identity
 
     return model

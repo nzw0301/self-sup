@@ -8,7 +8,7 @@ defaults:
     - lr_scheduler: simclr
     - loss: simclr
     - optimizer: simclr
-    - override hydra/output: custom
     - projection_head: simclr_v1
+    - override hydra/output: custom
 
 name: simclr

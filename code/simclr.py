@@ -100,7 +100,8 @@ def main(cfg: OmegaConf) -> None:
     )[0]
 
     num_gpus = cfg["distributed"]["world_size"]
-    num_train_samples_per_epoch = train_batch_size * len(train_data_loader) * num_gpus
+    num_update_per_epoch = len(train_data_loader)
+    num_train_samples_per_epoch = train_batch_size * num_update_per_epoch * num_gpus
 
     is_cifar = "cifar" in cfg["dataset"]["name"]
 
@@ -147,7 +148,7 @@ def main(cfg: OmegaConf) -> None:
     )
     lr_list = calculate_lr_list(
         init_lr,
-        num_lr_updates_per_epoch=len(train_data_loader),
+        num_lr_updates_per_epoch=num_update_per_epoch,
         warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
         epochs=epochs,
     )
@@ -162,16 +163,18 @@ def main(cfg: OmegaConf) -> None:
         train_data_loader.sampler.set_epoch(epoch)
         sum_train_loss = torch.tensor([0.0], device=local_rank)
 
-        for views, _ in enumerate(train_data_loader):
+        for i, (views, _) in enumerate(train_data_loader):
 
             # Adjust learning rate by applying linear warming
             # update learning rate.
+            lr_index = epoch * num_update_per_epoch + i
             for param_group in optimizer.param_groups:
-                param_group["lr"] = lr_list[epoch]
+                param_group["lr"] = lr_list[lr_index]
 
             optimizer.zero_grad()
 
             views = [view.to(local_rank) for view in views]
+
             with torch.autocast("cuda"):
                 z_0 = model(views[0])
                 z_1 = model(views[1])
@@ -185,16 +188,12 @@ def main(cfg: OmegaConf) -> None:
         torch.distributed.reduce(sum_train_loss, dst=0)
 
         if local_rank == 0:
-            progress = (epoch + 1) / (epochs + 1)
+            progress = (epoch + 1) / (epochs)
             avg_train_loss = sum_train_loss.item() / num_train_samples_per_epoch
+            lr_for_logging = optimizer.param_groups[0]["lr"]
             logging.info(
-                "Epoch:{}/{} progress:{:.3f} loss:{:.3f}, lr:{:.7f}".format(
-                    epoch,
-                    epochs,
-                    progress,
-                    avg_train_loss,
-                    optimizer.param_groups[0]["lr"],
-                )
+                f"Epoch:{epoch+1}/{epochs} progress:{progress:.3f} loss:{avg_train_loss:.3f}, "
+                f"lr:{lr_for_logging:.7f}"
             )
 
             # send metrics to wandb
@@ -202,9 +201,11 @@ def main(cfg: OmegaConf) -> None:
                 data={"train_contrastive_loss": avg_train_loss}, step=epoch,
             )
 
-    save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
-    torch.save(model.state_dict(), save_fname)
+    if local_rank == 0:
+        save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
+        torch.save(model.state_dict(), save_fname)
 
+    torch.distributed.barrier()
 
 if __name__ == "__main__":
     main()
