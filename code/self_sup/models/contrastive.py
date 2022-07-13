@@ -1,7 +1,8 @@
+from typing import Optional, Union
+
 import torch
-from torchvision.models import resnet18, resnet34, resnet50
-from typing import Union, Optional
-from torchvision.models import ResNet
+from torchvision.models import ResNet, resnet18, resnet34, resnet50
+
 from .classifier import SupervisedModel
 from .head import ProjectionHead
 

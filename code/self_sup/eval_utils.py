@@ -1,12 +1,11 @@
 import logging
 import os
+from code.self_sup.models.contrastive import CentroidClassifier, ContrastiveModel
 
 import numpy as np
 import torch
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
-
-from code.self_sup.models.contrastive import CentroidClassifier, ContrastiveModel
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

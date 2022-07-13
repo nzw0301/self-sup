@@ -1,12 +1,8 @@
 import logging
 import os
-
 from pathlib import Path
-from typing import Union
-from typing import Dict
-from typing import Sequence
-from typing import Tuple
-from typing import Iterator
+from typing import Dict, Iterator, Sequence, Tuple, Union
+
 import hydra
 import numpy as np
 import torch
@@ -14,8 +10,10 @@ import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
 from self_sup.data.transforms import SimCLRTransforms
-from self_sup.data.utils import create_data_loaders_from_datasets
-from self_sup.data.utils import get_train_val_test_datasets
+from self_sup.data.utils import (
+    create_data_loaders_from_datasets,
+    get_train_val_test_datasets,
+)
 from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.loss import NT_Xent
@@ -206,6 +204,7 @@ def main(cfg: OmegaConf) -> None:
         torch.save(model.state_dict(), save_fname)
 
     torch.distributed.barrier()
+
 
 if __name__ == "__main__":
     main()

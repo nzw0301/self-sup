@@ -1,6 +1,6 @@
+import numpy as np
 import pytest
 import torch
-import numpy as np
 from self_sup.loss import NT_Xent
 
 
