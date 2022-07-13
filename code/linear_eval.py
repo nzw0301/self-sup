@@ -18,7 +18,7 @@ from self_sup.distributed_utils import init_ddp
 from self_sup.eval_utils import learnable_eval
 from self_sup.logger import get_logger
 from self_sup.models.classifier import LinearClassifier
-from self_sup.models.contrastive import ContrastiveModel
+from self_sup.models.contrastive import get_contrastive_model
 from self_sup.wandb_utils import flatten_omegaconf
 
 
@@ -44,7 +44,7 @@ def main(cfg: OmegaConf):
     weight_name = weights_path.name
     self_sup_config_path = weights_path.parent / ".hydra" / "config.yaml"
     with open(self_sup_config_path) as f:
-        self_sup_conf = yaml.load(f, Loader=yaml.FullLoader)
+        pre_train_conf = yaml.load(f, Loader=yaml.FullLoader)
 
     # initialise data loaders.
     train_dataset, validation_dataset, test_dataset = get_train_val_test_datasets(
@@ -55,6 +55,12 @@ def main(cfg: OmegaConf):
         normalize=cfg["dataset"]["normalize"],
     )
     train_dataset.transform = get_data_augmentation(cfg["augmentation"])
+    validation_dataset.transform = torchvision.transforms.Compose[
+        torchvision.transforms.ToTensor()
+    ]
+    test_dataset.transform = torchvision.transforms.Compose[
+        torchvision.transforms.ToTensor()
+    ]
 
     train_batch_size = cfg["experiment"]["train_batch_size"]
     (
@@ -73,22 +79,7 @@ def main(cfg: OmegaConf):
         distributed=True,
     )
 
-    model = ContrastiveModel(
-        base_cnn=self_sup_conf["architecture"]["base_cnn"],
-        d=self_sup_conf["parameter"]["d"],
-        is_cifar="cifar" in cfg["dataset"]["name"],
-    )
-
-    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = model.to(local_rank)
-
-    state_dict = torch.load(weights_path)
-    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-
-    if use_cuda:
-        model.load_state_dict(state_dict, strict=False)
-    else:
-        model.load_state_dict(state_dict, strict=False, map_location=rank)
+    feature_extractor = get_contrastive_model(pre_train_conf, local_rank, weights_path)
 
     # get the dimensionality of the representation
     if cfg["experiment"]["use_projection_head"]:
@@ -107,7 +98,9 @@ def main(cfg: OmegaConf):
 
     # initialise linear classifier
     # NOTE: the weights are not normalize
-    classifier = LinearClassifier(num_last_units, num_classes, normalize=False).to(local_rank)
+    classifier = LinearClassifier(num_last_units, num_classes, normalize=False).to(
+        local_rank
+    )
     classifier = torch.nn.parallel.DistributedDataParallel(
         classifier, device_ids=[local_rank]
     )

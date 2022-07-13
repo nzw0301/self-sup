@@ -1,5 +1,7 @@
 import torch
 from torchvision.models import resnet18, resnet34, resnet50
+from typing import Union
+from contrastive import ContrastiveModel
 
 
 class NonLinearClassifier(torch.nn.Module):
@@ -15,7 +17,7 @@ class NonLinearClassifier(torch.nn.Module):
             torch.nn.Linear(num_hidden, num_classes),
         )
 
-    def forward(self, inputs: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """
         Return Unnormalized probabilities
 
@@ -31,7 +33,7 @@ class NormalisedLinear(torch.nn.Linear):
     Linear module with normalized weights.
     """
 
-    def forward(self, input) -> torch.FloatTensor:
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         w = torch.nn.functional.normalize(self.weight, dim=1, p=2)
         return torch.nn.functional.linear(input, w, self.bias)
 
@@ -54,27 +56,27 @@ class LinearClassifier(torch.nn.Module):
         else:
             self.classifier = torch.nn.Linear(num_features, num_classes)
 
-    def forward(self, inputs: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.classifier(inputs)  # N x num_classes
 
 
 class CentroidClassifier(torch.nn.Module):
-    def __init__(self, weights: torch.FloatTensor):
+    def __init__(self, weights: torch.Tensor):
         """
         :param weights: The pre-computed weights of the classifier.
         """
         super(CentroidClassifier, self).__init__()
         self.weights = weights  # d x num_classes
 
-    def forward(self, inputs) -> torch.FloatTensor:
+    def forward(self, inputs) -> torch.Tensor:
         return torch.matmul(inputs, self.weights)  # N x num_classes
 
     @staticmethod
-    def create_weights(data_loader, num_classes: int) -> torch.FloatTensor:
+    def create_weights(data_loader, num_classes: int) -> torch.Tensor:
         """
         :param data_loader: Data loader of feature representation to create weights.
         :param num_classes: The number of classes.
-        :return: FloatTensor contains weights.
+        :return: Tensor contains weights.
         """
 
         X = data_loader.data
@@ -116,3 +118,21 @@ class SupervisedModel(torch.nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
 
         return self.f(inputs)
+
+
+class ClassifierWithFeatureExtractor(torch.nn.Module):
+    def __init__(
+        self,
+        feature_extractor: Union[SupervisedModel, ContrastiveModel],
+        predictor: Union[LinearClassifier, NonLinearClassifier, NormalisedLinear],
+    ) -> None:
+        super(ClassifierWithFeatureExtractor, self).__init__()
+        self.feature_extractor = feature_extractor
+        self.predictor = predictor
+
+    def make_ddp(self):
+        pass
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        features = self.feature_extractor(inputs)
+        return self.predictor(features)

@@ -2,7 +2,7 @@ from typing import Optional, Union
 
 import torch
 from torchvision.models import ResNet, resnet18, resnet34, resnet50
-
+from omegaconf import OmegaConf
 from .classifier import SupervisedModel
 from .head import ProjectionHead
 
@@ -85,4 +85,28 @@ def modify_resnet_by_simclr_for_cifar(
         model.conv1 = conv
         model.maxpool = identity
 
+    return model
+
+
+def get_contrastive_model(
+    cfg: OmegaConf, local_rank: int, pre_train_weight_path: Optional[str] = None
+) -> ContrastiveModel:
+    model = ContrastiveModel(
+        base_cnn=cfg["backbone"]["name"],
+        head=ProjectionHead(
+            input_dim=2048 if cfg["backbone"]["name"] == "resnet50" else 512,
+            latent_dim=cfg["projection_head"]["d"],
+            num_non_linear_blocks=cfg["projection_head"]["num_hidden_layer"],
+        ),
+        is_cifar="cifar" in cfg["dataset"]["name"],
+    )
+    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    model = model.to(local_rank)
+
+    if pre_train_weight_path is None:
+        return model
+
+    state_dict = torch.load(pre_train_weight_path)
+    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    model.load_state_dict(state_dict, strict=False, map_location=local_rank)
     return model

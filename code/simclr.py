@@ -18,8 +18,7 @@ from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.loss import NT_Xent
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
-from self_sup.models.contrastive import ContrastiveModel
-from self_sup.models.head import ProjectionHead
+from self_sup.models.contrastive import get_contrastive_model
 from self_sup.wandb_utils import flatten_omegaconf
 from torch.cuda.amp import GradScaler
 
@@ -114,17 +113,7 @@ def main(cfg: OmegaConf) -> None:
             group="seed-{}".format(seed),
         )
 
-    model = ContrastiveModel(
-        base_cnn=cfg["backbone"]["name"],
-        head=ProjectionHead(
-            input_dim=2048 if cfg["backbone"]["name"] == "resnet50" else 512,
-            latent_dim=cfg["projection_head"]["d"],
-            num_non_linear_blocks=cfg["projection_head"]["num_hidden_layer"],
-        ),
-        is_cifar=is_cifar,
-    )
-    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = model.to(local_rank)
+    model = get_contrastive_model(cfg, local_rank, is_cifar)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     simclr_loss_function = NT_Xent(

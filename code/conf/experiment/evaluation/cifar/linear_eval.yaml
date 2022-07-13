@@ -1,10 +1,11 @@
 # @package _global_
 experiment:
-    batch_size: 512 # the size of mini-batches to forward.
+    train_batch_size: 512 # the size of mini-batches to forward.
     target_weight_file: # for linear eval
     epochs: 100
     seed: 7 # random seed value
     num_workers: 8
     classifier: linear
     use_projection_head: false # original feature extractor to the SimCLR paper
-    normalize: false
+    normalize: false # normalize feature vector
+    eval_batch_size: 512

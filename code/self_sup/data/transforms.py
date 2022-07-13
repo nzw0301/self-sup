@@ -2,6 +2,7 @@ from typing import List
 
 import numpy as np
 import torch
+import torchvision.transforms
 from omegaconf import OmegaConf
 from torchvision import transforms
 
@@ -78,8 +79,17 @@ class SimCLRTransforms:
         return [self.transform(x) for _ in range(self._num_views)]
 
 
-def get_data_augmentation(cfg: OmegaConf):
-    assert cfg["name"] in {"simclr_data_aug"}
+def get_data_augmentation(cfg: OmegaConf) -> torchvision.transforms.Compose:
+    aug_name = cfg["name"]
+    assert aug_name in {"simclr_data_aug", "simclr_data_aug_for_linear_eval"}
 
-    if cfg["name"] == "simclr_data_aug":
+    if aug_name == "simclr_data_aug":
         return create_simclr_data_augmentation(cfg["strength"], size=cfg["size"])
+    elif aug_name == "simclr_data_aug_for_linear_eval":
+        return transforms.Compose(
+            [
+                transforms.RandomResizedCrop(size=cfg["size"]),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ToTensor(),
+            ]
+        )
