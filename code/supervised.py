@@ -1,15 +1,11 @@
 import os
 from pathlib import Path
-from typing import Tuple
 
 import hydra
 import numpy as np
 import torch
 import wandb
 from omegaconf import OmegaConf
-from torch.cuda.amp import GradScaler
-from torch.nn.functional import cross_entropy
-from torch.utils.data import DataLoader
 
 from self_sup.data.transforms import get_data_augmentation
 from self_sup.data.utils import (
@@ -21,46 +17,15 @@ from self_sup.logger import get_logger
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 from self_sup.models.classifier import SupervisedModel
 from self_sup.models.utils import modify_resnet_by_simclr_for_cifar
+from self_sup.train_utils import supervised_training, test_eval
 from self_sup.wandb_utils import flatten_omegaconf
 
-
-def validation(
-    data_loader: DataLoader, model: SupervisedModel, device: torch.device
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    :param data_loader: Data loader for a validation or test dataset.
-    :param model: ResNet based classifier.
-    :param device: A `torch.device` instance to store the data and metrics.
-
-    :return: Categorical cross-entropy loss and the number of correctly predicted samples.
-    """
-
-    model.eval()
-
-    sum_loss = torch.tensor([0.0], device=device)
-    num_corrects = torch.tensor([0.0], device=device)
-
-    with torch.inference_mode():
-        for data, targets in data_loader:
-            data, targets = data.to(device), targets.to(device)
-            logits = model(data)  # (mini-batch-size, #classes)
-            loss = cross_entropy(
-                logits, targets, reduction="sum"
-            )  # (mini-batch-size, )
-
-            predicted = torch.max(logits.data, dim=1)[1]  # (mini-batch-size, )
-
-            sum_loss += loss
-            num_corrects += (predicted == targets).sum()
-
-    return sum_loss, num_corrects
+logger = get_logger()
 
 
 # TODO (nzw0301):Version_base=None changes working dir somehow, so remove it as a hotfix...
 @hydra.main(config_path="conf", config_name="supervised")
 def main(cfg: OmegaConf):
-    logger = get_logger()
-
     # check_hydra_conf(cfg)
 
     local_rank = int(os.environ["LOCAL_RANK"]) if torch.cuda.is_available() else "cpu"
@@ -104,9 +69,7 @@ def main(cfg: OmegaConf):
     )
 
     num_classes = len(np.unique(test_dataset.targets))
-    num_train_samples_per_epoch = (
-        train_batch_size * len(train_data_loader) * cfg["distributed"]["world_size"]
-    )
+
     num_test_samples = len(test_dataset)
 
     if validation_dataset is None:
@@ -161,100 +124,19 @@ def main(cfg: OmegaConf):
     )
     # optimizer = LARC(optimizer=optimizer, trust_coefficient=0.001, clip=False)
 
-    scaler = GradScaler()
-
-    best_metric = np.finfo(np.float64).max
     save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
 
-    for epoch in range(epochs):
-        # one training loop
-        model.train()
-        train_data_loader.sampler.set_epoch(epoch)
-        sum_train_loss = torch.tensor([0.0], device=local_rank)
+    supervised_training(
+        model,
+        train_data_loader,
+        optimizer,
+        lr_list,
+        validation_data_loader,
+        local_rank,
+        cfg,
+    )
 
-        # update learning rate
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr_list[epoch]
-
-        for data, targets in train_data_loader:
-            optimizer.zero_grad()
-            data, targets = data.to(local_rank), targets.to(local_rank)
-            with torch.autocast("cuda"):
-                loss = cross_entropy(model(data), targets)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            sum_train_loss += loss.item() * train_batch_size
-
-        torch.distributed.reduce(sum_train_loss, dst=0)
-
-        # validation
-        sum_val_loss, num_val_corrects = validation(
-            validation_data_loader, model, local_rank
-        )
-
-        torch.distributed.reduce(sum_val_loss, dst=0)
-        torch.distributed.reduce(num_val_corrects, dst=0)
-
-        # logging, send values to wandb, and save checkpoint,
-        if local_rank == 0:
-            # logging
-            progress = (epoch + 1) / (epochs + 1)
-            lr_for_logging = optimizer.param_groups[0]["lr"]
-            train_loss = sum_train_loss.item() / num_train_samples_per_epoch
-            val_loss = sum_val_loss.item() / num_val_samples
-            val_acc = num_val_corrects.item() / num_val_samples * 100.0
-
-            log_message = (
-                f"Epoch:{epoch}/{epochs} progress:{progress:.3f}, "
-                f"train loss:{train_loss:.3f}, lr:{lr_for_logging:.7f}, "
-                f"val loss:{val_loss:.3f}, val acc:{val_acc:.3f}"
-            )
-            logger.info(log_message)
-
-            # send metrics to wandb
-            wandb.log(
-                data={
-                    "supervised_train_loss": train_loss,
-                    "supervised_val_loss": val_loss,
-                    "supervised_val_acc": val_acc,
-                },
-                step=epoch,
-            )
-
-            # save checkpoint if metric improves.
-            if cfg["experiment"]["metric"] == "loss":
-                metric = val_loss
-            else:
-                # store metric as risk: 1 - accuracy
-                metric = 1.0 - val_acc
-
-            if metric <= best_metric:
-                torch.save(model.state_dict(), save_fname)
-                best_metric = metric
-
-        torch.distributed.barrier()
-
-    # evaluate the best performed checkpoint on the test dataset
-    torch.distributed.barrier()
-    map_location = {"cuda:%d" % 0: "cuda:%d" % local_rank}
-    model.load_state_dict(torch.load(save_fname, map_location=map_location))
-    test_loss, test_num_corrects = validation(test_data_loader, model, local_rank)
-
-    torch.distributed.reduce(test_loss, dst=0)
-    torch.distributed.reduce(test_num_corrects, dst=0)
-
-    if local_rank == 0:
-        test_loss = test_loss.item() / num_test_samples
-        test_acc = test_num_corrects.item() / num_test_samples * 100.0
-
-        wandb.run.summary["supervised_test_loss"] = test_loss
-        wandb.run.summary["supervised_test_acc"] = test_acc
-
-        log_message = f"test loss:{test_loss:.3f}, test acc:{test_acc:.3f}"
-        logger.info(log_message)
-
-    torch.distributed.barrier()
+    test_eval(model, test_data_loader, local_rank, save_fname)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 
@@ -16,10 +15,11 @@ from self_sup.data.utils import (
     get_train_val_test_datasets,
 )
 from self_sup.distributed_utils import init_ddp
-from self_sup.eval_utils import learnable_eval
 from self_sup.logger import get_logger
+from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 from self_sup.models.classifier import ClassifierWithFeatureExtractor, LinearClassifier
 from self_sup.models.contrastive import get_contrastive_model
+from self_sup.train_utils import supervised_training, test_eval
 from self_sup.wandb_utils import flatten_omegaconf
 
 
@@ -91,12 +91,19 @@ def main(cfg: OmegaConf):
 
     if local_rank == 0:
         logger.info(
-            "#train: {}, #val: {}, #test: {}".format(
-                len(train_dataset), len(validation_dataset), len(test_dataset)
-            )
+            f"#train: {len(train_dataset)}, #val: {len(validation_dataset)}, #test:{len(test_dataset)}"
         )
         logger.info("Evaluation by using {}".format(weight_name))
+        wandb.init(
+            dir=hydra.utils.get_original_cwd(),
+            project="self-sup",
+            entity="nzw0301",
+            config=flatten_omegaconf(cfg),
+            tags=(cfg["dataset"]["name"], "linear-eval"),
+            group="seed-{}".format(seed),
+        )
 
+    assert "cifar" in cfg["dataset"]["name"]
     if "100" in cfg["dataset"]["name"]:
         num_classes = 100
     else:
@@ -115,42 +122,41 @@ def main(cfg: OmegaConf):
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
-    # execute linear evaluation protocol
-    (
-        train_accuracies,
-        train_top_k_accuracies,
-        train_losses,
-        val_accuracies,
-        val_top_k_accuracies,
-        val_losses,
-    ) = learnable_eval(
-        cfg, classifier, model, training_data_loader, validation_data_loader, top_k
+    epochs = cfg["experiment"]["epochs"]
+    init_lr = calculate_scaled_lr(
+        base_lr=cfg["optimizer"]["lr"],
+        batch_size=train_batch_size,
+        lr_schedule=cfg["lr_scheduler"]["name"],
+    )
+    # simsiam version.
+    lr_list = calculate_lr_list(
+        init_lr,
+        num_lr_updates_per_epoch=1,
+        warmup_epochs=cfg["lr_scheduler"]["warmup_epochs"],
+        epochs=epochs,
     )
 
-    if rank == 0:
-        classification_results = {}
-        classification_results[weight_name] = {
-            "train_accuracies": train_accuracies,
-            "val_accuracies": val_accuracies,
-            "train_losses": train_losses,
-            "val_losses": val_losses,
-            "train_top_{}_accuracies".format(top_k): train_top_k_accuracies,
-            "val_top_{}_accuracies".format(top_k): val_top_k_accuracies,
-            "lowest_val_loss": min(val_losses),
-            "highest_val_acc": max(val_accuracies),
-            "highest_val_top_k_acc": max(val_top_k_accuracies),
-        }
+    # optimizer
+    optimizer = torch.optim.SGD(
+        params=model.parameters(),
+        lr=init_lr,
+        momentum=cfg["optimizer"]["momentum"],
+        nesterov=False,
+        weight_decay=cfg["optimizer"]["decay"],
+    )
 
-        logger.info(
-            "train acc: {}, val acc: {}".format(
-                max(train_accuracies), max(val_accuracies)
-            )
-        )
+    supervised_training(
+        model,
+        train_data_loader,
+        optimizer,
+        lr_list,
+        validation_data_loader,
+        local_rank,
+        cfg,
+    )
 
-        fname = cfg["experiment"]["classification_results_json_fname"]
-
-        with open(fname, "w") as f:
-            json.dump(classification_results, f)
+    save_fname = Path(os.getcwd()) / cfg["experiment"]["output_model_name"]
+    test_eval(model, test_data_loader, local_rank, save_fname)
 
 
 if __name__ == "__main__":
