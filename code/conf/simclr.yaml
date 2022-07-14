@@ -1,0 +1,14 @@
+defaults:
+    - _self_
+    - augmentation: simclr
+    - backbone: resnet18
+    - dataset: cifar100
+    - distributed: base
+    - experiment: training/cifar
+    - lr_scheduler: simclr
+    - loss: simclr
+    - optimizer: simclr
+    - projection_head: simclr_v1
+    - override hydra/output: custom
+
+name: simclr

@@ -1,0 +1,5 @@
+# @package _global_
+projection_head:
+    name: simclr_v1_projection_head
+    d: 128 # dimensionality of hidden units
+    num_hidden_layer: 1 # the number of blocks that consists of affine -> BN -> ReLU.

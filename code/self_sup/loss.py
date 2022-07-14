@@ -34,138 +34,45 @@ class NT_Xent(torch.nn.Module):
         self.reduction = reduction
         self.device = device
 
-    def forward(self, views: list) -> torch.FloatTensor:
+    def forward(self, view_0: torch.Tensor, view_1: torch.Tensor) -> torch.Tensor:
         """
-        Generalised version of SimCLR's InfoNCE loss.
+        SimCLR's InfoNCE loss, namely, NTXent loss.
         The number of augmentation can be larger than 2.
 
-        :param views: list of feature representation. The shape is (T, N, D), where
-            `T` is the number of views,
+        :param
+            views_0: feature representation. The shape is (N, D), where
             `N` is the size of mini-batches (or the number of seed image, or K+1 in the paper),
             and `D` is the dimensionality of features.
+            views_1: feature representation. The shape is (N, D). the first axis data should be
+            corresponding to the fisrt axis's view_0.
         :return: Loss value. The shape depends on `reduction`: (2, N) or a scalar.
         """
 
-        num_views = len(views)  # == T
-        size_mini_batches = len(views[0])  # == N
+        B = len(view_0)  # == N
+        assert view_0.size() == view_1.size()
 
         # normalisation
-        views = [
-            torch.nn.functional.normalize(view, p=2, dim=1) for view in views
-        ]  # T x N x D
+        view_0 = torch.nn.functional.normalize(view_0, p=2, dim=1)  # N x D
+        view_1 = torch.nn.functional.normalize(view_1, p=2, dim=1)  # N x D
 
-        targets = torch.arange(size_mini_batches).to(
-            self.device
-        )  # == indices for positive pairs
-        mask = ~torch.eye(size_mini_batches, dtype=torch.bool).to(
-            self.device
-        )  # to remove similarity to themselves
+        sim_00 = torch.matmul(view_0, view_0.t()) / self.temperature
+        sim_01 = torch.matmul(view_0, view_1.t()) / self.temperature
+        sim_11 = torch.matmul(view_1, view_1.t()) / self.temperature
 
-        entropy_losses = []
-        for key_idx in range(num_views - 1):
+        # remove its own similarity
+        sim_00 = sim_00.flatten()[1:].view(B - 1, B + 1)[:, :-1].reshape(B, B - 1)
+        sim_11 = sim_11.flatten()[1:].view(B - 1, B + 1)[:, :-1].reshape(B, B - 1)
 
-            sim00 = (
-                torch.matmul(views[key_idx], views[key_idx].t()) / self.temperature
-            )  # N x N
-            # remove own similarities
-            sim00 = sim00[mask].view(size_mini_batches, -1)  # N x (N-1)
-
-            for positive_view_idx in range(key_idx + 1, num_views):
-                # negative
-                sim11 = (
-                    torch.matmul(views[positive_view_idx], views[positive_view_idx].t())
-                    / self.temperature
-                )  # N x N
-                # remove own similarities
-                sim11 = sim11[mask].view(size_mini_batches, -1)  # N x (N-1)
-
-                # positive and negatives
-                sim01 = (
-                    torch.matmul(views[key_idx], views[positive_view_idx].t())
-                    / self.temperature
-                )  # N x N
-
-                sim0 = [sim01, sim00]
-                sim1 = [sim01.t(), sim11]
-
-                exclude_indices = (key_idx, positive_view_idx)
-
-                # other negatives
-                for negative_views_idx in range(num_views):
-
-                    if negative_views_idx in exclude_indices:
-                        continue
-
-                    neg = (
-                        torch.matmul(views[key_idx], views[negative_views_idx].t())
-                        / self.temperature
-                    )  # N x N
-                    sim0.append(
-                        neg[mask].view(size_mini_batches, -1)
-                    )  # remove own similarity and add N x (N-1) tensor
-
-                    neg = (
-                        torch.matmul(
-                            views[positive_view_idx], views[negative_views_idx].t()
-                        )
-                        / self.temperature
-                    )  # N x N
-                    sim1.append(
-                        neg[mask].view(size_mini_batches, -1)
-                    )  # remove own similarity and add N x (N-1) tensor
-
-                sim0 = torch.cat(sim0, dim=1)  # N x (N + (#num-views-1) (N-1))
-                sim1 = torch.cat(sim1, dim=1)  # N x (N + (#num-views-1) (N-1))
-
-                if self.reduction == "none":
-                    entropy_losses.append(
-                        self.cross_entropy(sim0, targets, reduction="none")
-                    )
-                    entropy_losses.append(
-                        self.cross_entropy(sim1, targets, reduction="none")
-                    )
-                else:
-                    entropy_losses.append(
-                        self.cross_entropy(sim0, targets, reduction="sum")
-                        + self.cross_entropy(sim1, targets, reduction="sum")
-                    )
-
-        if self.reduction == "none":
-            return torch.stack(entropy_losses)
+        targets = torch.arange(B, device=self.device)
+        loss_01 = self.cross_entropy(
+            torch.hstack([sim_01, sim_00]), targets, reduction=self.reduction
+        )
+        loss_10 = self.cross_entropy(
+            torch.hstack([sim_01.t(), sim_11]), targets, reduction=self.reduction
+        )
         if self.reduction == "sum":
-            return torch.stack(entropy_losses).sum()  # shape: scalar
-        else:
-            return (
-                torch.stack(entropy_losses).sum()
-                / 2.0
-                / size_mini_batches
-                / len(entropy_losses)
-            )  # shape: scalar
-
-    def simclr_forward_with_single_view_negative(
-        self, views: list
-    ) -> torch.FloatTensor:
-        """
-        SimCLR's InfoNCE loss.
-        It assumes the number of views is 2, and view0 is used for key,
-        and view1 is used for positive / negative samples.
-
-        :param views: list of feature representation. The shape is (2, N, D), where
-            `T` is the number of views,
-            N` is the size of mini-batches ( or the number of seed image) ,
-            and `D` is the dimensionality of features.
-        :return: Loss value. The shape depends on `reduction`: (N,) or a scalar.
-        """
-        size_mini_batches = len(views[0])  # == N
-
-        targets = torch.arange(size_mini_batches).to(
-            self.device
-        )  # == indices for positive samples
-
-        # normalise
-        views = [
-            torch.nn.functional.normalize(view, p=2, dim=1) for view in views
-        ]  # T x N x D
-
-        cos = torch.matmul(views[0], views[1].t()) / self.temperature  # N x N
-        return self.cross_entropy(cos, targets, reduction=self.reduction)
+            return loss_01 + loss_10
+        elif self.reduction == "mean":
+            return 0.5 * (loss_01 + loss_10)
+        else:  # None
+            return torch.vstack([loss_01, loss_10])

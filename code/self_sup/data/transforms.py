@@ -1,14 +1,19 @@
+from typing import List
+
 import numpy as np
-from torchvision import transforms
+import torch
+import torchvision.transforms
 from omegaconf import OmegaConf
+from torchvision import transforms
 
 
-class RandomGaussianBlur(object):
+class RandomGaussianBlur:
     """
     https://github.com/facebookresearch/swav/blob/master/src/multicropdataset.py
     """
 
-    def __call__(self, img):
+    @staticmethod
+    def __call__(img):
         import cv2
 
         if np.random.rand() > 0.5:
@@ -45,7 +50,7 @@ def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Co
         transforms.RandomGrayscale(0.2),
         # end of color_distort
     ]
-    if size == 224:  # imagenet or pet dataset
+    if size == 224:  # ImageNet-1K or pet dataset's shape.
         common_transforms.append(RandomGaussianBlur())
     elif size == 32:
         pass
@@ -56,8 +61,10 @@ def create_simclr_data_augmentation(strength: float, size: int) -> transforms.Co
     return transforms.Compose(common_transforms)
 
 
-class SimCLRTransforms(object):
-    def __init__(self, strength: float = 0.5, size: int = 32, num_views: int = 2):
+class SimCLRTransforms:
+    def __init__(
+        self, strength: float = 0.5, size: int = 32, num_views: int = 2
+    ) -> None:
         # Definition is from Appendix A. of SimCLRv1 paper:
         # https://arxiv.org/pdf/2002.05709.pdf
 
@@ -66,14 +73,23 @@ class SimCLRTransforms(object):
         if num_views <= 1:
             raise ValueError("`num_views` must be greater than 1.")
 
-        self.num_views = num_views
+        self._num_views = num_views
 
-    def __call__(self, x) -> list:
-        return [self.transform(x) for _ in range(self.num_views)]
+    def __call__(self, x) -> List[torch.Tensor]:
+        return [self.transform(x) for _ in range(self._num_views)]
 
 
-def get_data_augmentation(cfg: OmegaConf):
-    assert cfg["name"] in {"simclr_data_aug"}
+def get_data_augmentation(cfg: OmegaConf) -> torchvision.transforms.Compose:
+    aug_name = cfg["name"]
+    assert aug_name in {"simclr_data_aug", "simclr_data_aug_for_linear_eval"}
 
-    if cfg["name"] == "simclr_data_aug":
+    if aug_name == "simclr_data_aug":
         return create_simclr_data_augmentation(cfg["strength"], size=cfg["size"])
+    elif aug_name == "simclr_data_aug_for_linear_eval":
+        return transforms.Compose(
+            [
+                transforms.RandomResizedCrop(size=cfg["size"]),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ToTensor(),
+            ]
+        )

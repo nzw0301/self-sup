@@ -17,8 +17,8 @@ from self_sup.data.utils import (
     fetch_dataset,
     get_num_classes,
 )
-from self_sup.eval_utils import centroid_eval, convert_vectors
-from self_sup.model import CentroidClassifier, ContrastiveModel
+from self_sup.models.contrastive import CentroidClassifier, ContrastiveModel
+from self_sup.train_utils import centroid_eval, convert_vectors
 
 
 @hydra.main(config_path="conf", config_name="eval_config")

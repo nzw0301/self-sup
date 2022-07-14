@@ -1,7 +1,12 @@
-# @package _group_
 defaults:
+    - _self_
+    - augmentation: linear_eval
     - dataset: cifar100
-    - experiment: evaluation/cifar/linear
-    - optimizer: linear
     - distributed: base
-    - hydra/output: eval
+    - experiment: evaluation/cifar/linear_eval
+    - lr_scheduler: linear_eval
+    - optimizer: linear_eval
+    - override hydra/output: eval
+
+name: linear_eval
+
