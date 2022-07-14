@@ -9,6 +9,8 @@ import torch
 import wandb
 from apex.parallel.LARC import LARC
 from omegaconf import OmegaConf
+from torch.cuda.amp import GradScaler
+
 from self_sup.data.transforms import SimCLRTransforms
 from self_sup.data.utils import (
     create_data_loaders_from_datasets,
@@ -20,7 +22,6 @@ from self_sup.loss import NT_Xent
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 from self_sup.models.contrastive import get_contrastive_model
 from self_sup.wandb_utils import flatten_omegaconf
-from torch.cuda.amp import GradScaler
 
 
 def exclude_from_wt_decay(

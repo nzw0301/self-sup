@@ -1,7 +1,9 @@
+from typing import Union
+
 import torch
 from torchvision.models import resnet18, resnet34, resnet50
-from typing import Union
-from contrastive import ContrastiveModel
+
+from .contrastive import ContrastiveModel
 
 
 class NonLinearClassifier(torch.nn.Module):
@@ -35,7 +37,7 @@ class NormalisedLinear(torch.nn.Linear):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         w = torch.nn.functional.normalize(self.weight, dim=1, p=2)
-        return torch.nn.functional.linear(input, w, self.bias)
+        return torch.nn.functional.linear(inputs, w, self.bias)
 
 
 class LinearClassifier(torch.nn.Module):
@@ -125,14 +127,34 @@ class ClassifierWithFeatureExtractor(torch.nn.Module):
         self,
         feature_extractor: Union[SupervisedModel, ContrastiveModel],
         predictor: Union[LinearClassifier, NonLinearClassifier, NormalisedLinear],
+        frozen_feature_extractor: bool,
     ) -> None:
         super(ClassifierWithFeatureExtractor, self).__init__()
-        self.feature_extractor = feature_extractor
-        self.predictor = predictor
 
-    def make_ddp(self):
-        pass
+        self.predictor = predictor
+        self._frozen = frozen_feature_extractor
+        self.feature_extractor = feature_extractor
+        if self._frozen:
+            self.feature_extractor.forward = torch.no_grad()(
+                self.feature_extractor.forward
+            )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # features = self.feature_extractor(inputs)
+        # if self._frozen:
+        # with torch.no_grad():
         features = self.feature_extractor(inputs)
         return self.predictor(features)
+
+    def train(self, mode: bool = True):
+        self.predictor.train(mode)
+        if self._frozen:
+            self.feature_extractor.train(False)  # same was model.eval()
+        else:
+            self.feature_extractor.train(mode)
+        return self
+
+    def eval(self):
+        self.predictor.eval()
+        self.feature_extractor.eval()
+        return self

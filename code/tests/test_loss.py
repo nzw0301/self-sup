@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch
+
 from self_sup.loss import NT_Xent
 
 

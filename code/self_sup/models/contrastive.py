@@ -1,10 +1,11 @@
-from typing import Optional, Union
+from typing import Optional
 
 import torch
-from torchvision.models import ResNet, resnet18, resnet34, resnet50
 from omegaconf import OmegaConf
-from .classifier import SupervisedModel
+from torchvision.models import resnet18, resnet34, resnet50
+
 from .head import ProjectionHead
+from .utils import modify_resnet_by_simclr_for_cifar
 
 
 class ContrastiveModel(torch.nn.Module):
@@ -59,33 +60,6 @@ class ContrastiveModel(torch.nn.Module):
         h = self.encode(inputs)
         z = self.g(h)
         return z  # N x d
-
-
-def modify_resnet_by_simclr_for_cifar(
-    model: Union[SupervisedModel, ResNet]
-) -> Union[SupervisedModel, ResNet]:
-    """By following SimCLR v1 paper, this function replaces a few layers for CIFAR-10 experiments.
-
-    Args:
-        model: Instance of `SupervisedModel`.
-
-    Returns:
-        SupervisedModel: Modified `SupervisedModel`.
-    """
-
-    # Replace the first conv2d with smaller conv and remove the first pooling.
-    conv = torch.nn.Conv2d(
-        in_channels=3, out_channels=64, stride=1, kernel_size=3, padding=3, bias=False,
-    )
-    identity = torch.nn.Identity()
-    if isinstance(model, SupervisedModel):
-        model.f.conv1 = conv
-        model.f.maxpool = identity
-    elif isinstance(model, ResNet):
-        model.conv1 = conv
-        model.maxpool = identity
-
-    return model
 
 
 def get_contrastive_model(

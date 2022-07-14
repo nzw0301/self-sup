@@ -9,6 +9,7 @@ import torchvision
 import wandb
 import yaml
 from omegaconf import OmegaConf
+
 from self_sup.data.transforms import get_data_augmentation
 from self_sup.data.utils import (
     create_data_loaders_from_datasets,
@@ -17,7 +18,7 @@ from self_sup.data.utils import (
 from self_sup.distributed_utils import init_ddp
 from self_sup.eval_utils import learnable_eval
 from self_sup.logger import get_logger
-from self_sup.models.classifier import LinearClassifier
+from self_sup.models.classifier import ClassifierWithFeatureExtractor, LinearClassifier
 from self_sup.models.contrastive import get_contrastive_model
 from self_sup.wandb_utils import flatten_omegaconf
 
@@ -83,27 +84,36 @@ def main(cfg: OmegaConf):
 
     # get the dimensionality of the representation
     if cfg["experiment"]["use_projection_head"]:
-        num_last_units = model.g.projection_head.linear2.out_features
+        num_last_units = feature_extractor.g.projection_head.linear2.out_features
     else:
-        num_last_units = model.g.projection_head.linear1.in_features
-        model.g = torch.nn.Identity()
+        num_last_units = feature_extractor.g.projection_head.linear1.in_features
+        feature_extractor.g = torch.nn.Identity()
 
     if local_rank == 0:
         logger.info(
-            "#train: {}, #val: {}".format(
-                len(training_dataset), len(validation_dataset)
+            "#train: {}, #val: {}, #test: {}".format(
+                len(train_dataset), len(validation_dataset), len(test_dataset)
             )
         )
         logger.info("Evaluation by using {}".format(weight_name))
+
+    if "100" in cfg["dataset"]["name"]:
+        num_classes = 100
+    else:
+        num_classes = 10
 
     # initialise linear classifier
     # NOTE: the weights are not normalize
     classifier = LinearClassifier(num_last_units, num_classes, normalize=False).to(
         local_rank
     )
-    classifier = torch.nn.parallel.DistributedDataParallel(
-        classifier, device_ids=[local_rank]
+    model = ClassifierWithFeatureExtractor(
+        feature_extractor=feature_extractor,
+        predictor=classifier,
+        frozen_feature_extractor=True,
     )
+
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
     # execute linear evaluation protocol
     (

@@ -7,6 +7,10 @@ import numpy as np
 import torch
 import wandb
 from omegaconf import OmegaConf
+from torch.cuda.amp import GradScaler
+from torch.nn.functional import cross_entropy
+from torch.utils.data import DataLoader
+
 from self_sup.data.transforms import get_data_augmentation
 from self_sup.data.utils import (
     create_data_loaders_from_datasets,
@@ -16,11 +20,8 @@ from self_sup.distributed_utils import init_ddp
 from self_sup.logger import get_logger
 from self_sup.lr_utils import calculate_lr_list, calculate_scaled_lr
 from self_sup.models.classifier import SupervisedModel
-from self_sup.models.contrastive import modify_resnet_by_simclr_for_cifar
+from self_sup.models.utils import modify_resnet_by_simclr_for_cifar
 from self_sup.wandb_utils import flatten_omegaconf
-from torch.cuda.amp import GradScaler
-from torch.nn.functional import cross_entropy
-from torch.utils.data import DataLoader
 
 
 def validation(
